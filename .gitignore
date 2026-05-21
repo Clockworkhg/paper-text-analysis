@@ -35,3 +35,12 @@ Thumbs.db
 *.log
 *.tmp
 ~$*
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+*.spec
+
+# Local app settings (may contain user paths)
+**/settings.json

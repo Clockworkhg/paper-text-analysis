@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cads-workbench"
+version = "0.2.0"
+description = "Corpus-Assisted Discourse Studies (CADS) toolkit for news media text analysis"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Clockworkhg"}]
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Text Processing :: Linguistic",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "pandas>=1.5,<3.0",
+    "openpyxl>=3.0",
+    "spacy>=3.0,<4.0",
+    "nltk>=3.8",
+    "rapidfuzz>=3.0",
+    "requests>=2.28",
+    "tldextract>=3.0",
+    "matplotlib>=3.5",
+    "python-docx>=0.8",
+    "numpy>=1.21",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+ocr = [
+    "RapidOCR>=1.3",
+    "pypdfium2>=4.0",
+]
+online = [
+    "openai>=1.0",
+]
+
+[project.scripts]
+cads = "research_tool:main"
+cads-gui = "integrated_app:main"
+
+[project.urls]
+Homepage = "https://github.com/Clockworkhg/paper-text-analysis"
+Issues = "https://github.com/Clockworkhg/paper-text-analysis/issues"
+
+[tool.setuptools]
+py-modules = ["research_tool", "pipeline", "integrated_app", "config"]
+packages = [
+    "shared",
+    "modules",
+    "LexisWordToTxt",
+    "LexisWordToTxt.app",
+    "LexisWordToTxt.app.gui",
+]
+
+[tool.setuptools.package-data]
+modules = ["*.py"]
+shared = ["*.py"]
+"LexisWordToTxt" = ["**/*.py"]

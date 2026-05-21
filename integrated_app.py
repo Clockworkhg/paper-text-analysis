@@ -6,16 +6,20 @@
 """
 
 import json
+import logging
 import os
 import re
 import threading
 import queue
 from pathlib import Path
+from typing import Any, Dict
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 import pandas as pd
+
+logger = logging.getLogger("integrated_app")
 
 
 class WorkerMixin:
@@ -97,6 +101,38 @@ class FileRow(ttk.Frame):
 
     def get(self):
         return self.var.get().strip()
+
+
+def build_run_config_from_gui(
+    input_path: str,
+    output_dir: str,
+    targets: str,
+    country: bool,
+    force: bool,
+    steps: list,
+    state: dict,
+) -> dict:
+    from shared.research_output import now_iso, environment_snapshot, ensure_research_dirs
+
+    out_dir = Path(output_dir)
+    return {
+        "created_at": now_iso(),
+        "project": "论文文本分析工具集",
+        "research_positioning": "Corpus-Assisted Discourse Studies (CADS) with CDA, collocation, semantic prosody, and appraisal/framing analysis.",
+        "input": str(Path(input_path).absolute()),
+        "output": str(out_dir.absolute()),
+        "targets": targets,
+        "country_lookup_enabled": country,
+        "force": force,
+        "steps_to_run": steps,
+        "environment": environment_snapshot(),
+        "output_layout": ensure_research_dirs(out_dir),
+        "state": state,
+        "method_note": (
+            "Automated outputs are candidate evidence for corpus-assisted discourse analysis. "
+            "Final interpretations should be checked against KWIC/concordance context and, where relevant, human review."
+        ),
+    }
 
 
 class TabPipeline(ttk.Frame, WorkerMixin):
@@ -190,114 +226,73 @@ class TabPipeline(ttk.Frame, WorkerMixin):
 
     def _worker(self, inp, out_dir, targets, country, force, steps):
         try:
+            from shared.pipeline_steps import (
+                STEPS,
+                s1_docx_to_txt,
+                s2_json_to_excel,
+                s3_merge_and_country,
+                s4_extract_adjectives,
+                s5_pos_and_translate,
+            )
+            from shared.research_output import build_run_config, write_run_config
+            from shared.validation import generate_validation_artifacts
+
             out = Path(out_dir)
             out.mkdir(parents=True, exist_ok=True)
+            log_fn = lambda m: self._w_put("log", m)
+
+            state: Dict[str, Any] = {}
 
             if 1 in steps:
-                self._w_put("log", "[步骤1] DOCX → TXT + 报告 JSON …")
-                from docx import Document
-                from LexisWordToTxt.app.processor import process_docx, write_report_json, preflight_check
-                from LexisWordToTxt.app.constants import DEFAULT_SOURCE_CANONICAL_MAP, DEFAULT_NOISE_KEYWORDS
-
-                corpus_dir = out / "corpus"
-                docx_path = Path(inp)
-                doc = Document(docx_path)
-                full_text = "\n".join(p.text for p in doc.paragraphs)
-                check = preflight_check(full_text)
-                if not check["ok"]:
-                    self._w_put("log", f"  ⚠ 预检: {'; '.join(check['messages'])}")
-
-                count, empty, report = process_docx(
-                    docx_path=docx_path, out_dir=corpus_dir,
-                    write_metadata=True, filename_max_len=80,
-                    group_by_source=True,
-                    canonical_map=DEFAULT_SOURCE_CANONICAL_MAP,
-                    noise_keywords=DEFAULT_NOISE_KEYWORDS,
-                    normalize_source=True,
-                    log_fn=lambda m: self._w_put("log", f"  {m}"),
-                )
-                report_path = write_report_json(corpus_dir, report)
-                self._w_put("log", f"  文章数: {count}, 空正文: {empty}")
-                self._w_put("log", f"  ✅ 步骤1完成: {corpus_dir}")
+                self._w_put("log", f"[步骤1] {STEPS[1]} …")
+                result = s1_docx_to_txt(inp, str(out), log_fn=log_fn)
+                state["s1"] = result
+                self._w_put("log", "  ✅ 步骤1完成")
 
             if 2 in steps:
-                self._w_put("log", "[步骤2] 报告 JSON → 机构统计表 …")
-                corpus_dir = out / "corpus"
-                rpts = sorted(corpus_dir.glob("report-*.json"))
-                if not rpts:
+                self._w_put("log", f"[步骤2] {STEPS[2]} …")
+                report_path = state.get("s1", {}).get("report_path")
+                if not report_path:
+                    rpts = sorted((out / "corpus").glob("report-*.json"))
+                    if rpts:
+                        report_path = str(rpts[-1])
+                if not report_path:
                     raise FileNotFoundError("未找到步骤1的报告JSON")
-                rp = rpts[-1]
-                with open(rp, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                sources = data.get("by_source_count", {})
-                df = pd.DataFrame([{"Source": k, "Count": v} for k, v in sources.items()]).sort_values("Count", ascending=False)
-                src_excel = out / "source_counts.xlsx"
-                df.to_excel(str(src_excel), index=False)
-                self._w_put("log", f"  机构数: {len(df)}")
-                self._w_put("log", f"  ✅ 步骤2完成: {src_excel}")
+                result = s2_json_to_excel(report_path, str(out), log_fn=log_fn)
+                state["s2"] = result
+                self._w_put("log", "  ✅ 步骤2完成")
 
             if 3 in steps:
-                self._w_put("log", "[步骤3] 机构合并 + 国别识别 …")
-                from config import MergeConfig
-                from hebing import run_hebing
-                src_excel = out / "source_counts.xlsx"
-                if not src_excel.exists():
-                    raise FileNotFoundError(f"未找到: {src_excel}")
-                merged_path = out / "merged_sources.xlsx"
-                cfg = MergeConfig(
-                    fuzzy_threshold=92,
-                    enable_country_lookup=country,
-                    request_delay_ms=150,
-                    max_lookup=800,
-                    auto_accept_threshold=0.85,
-                    pie_topn=12,
-                )
-                run_hebing(str(src_excel), str(merged_path), "", cfg, verbose=True)
-                self._w_put("log", f"  ✅ 步骤3完成: {merged_path}")
+                self._w_put("log", f"[步骤3] {STEPS[3]} …")
+                src_excel = state.get("s2", {}).get("excel_path") or str(out / "source_counts.xlsx")
+                result = s3_merge_and_country(src_excel, str(out), enable_country=country, log_fn=log_fn)
+                state["s3"] = result
+                self._w_put("log", "  ✅ 步骤3完成")
 
             if 4 in steps and targets.strip():
-                self._w_put("log", "[步骤4] TXT语料 → 修饰形容词/短语 …")
-                from config import TxtAnalysisConfig
-                from txt_modifier_extractor_gui import process_txt, split_targets
-                corpus_dir = out / "corpus"
-                all_txt = list(corpus_dir.rglob("*.txt"))
-                if not all_txt:
-                    raise FileNotFoundError(f"语料目录 {corpus_dir} 下无 TXT 文件")
-                merged_txt = out / "_corpus_merged.txt"
-                with open(merged_txt, "w", encoding="utf-8") as f:
-                    for tf in all_txt:
-                        f.write(tf.read_text(encoding="utf-8", errors="ignore"))
-                        f.write("\n\n==========\n\n")
-                self._w_put("log", f"  合并 {len(all_txt)} 个 TXT")
-
-                tgt_list = split_targets(targets)
-                cfg = TxtAnalysisConfig(split_mode="regex", split_regex="====LINE====",
-                                        window_tokens=8, phrase_max_tokens=6,
-                                        nlp_batch_size=64, max_doc_chars=200000, use_online_judge=False)
-                adj_excel = out / "adjectives_phrases.xlsx"
-                process_txt(str(merged_txt), str(adj_excel), tgt_list, cfg,
-                            log_cb=lambda m: self._w_put("log", f"  {m}"))
-                self._w_put("log", f"  ✅ 步骤4完成: {adj_excel}")
+                self._w_put("log", f"[步骤4] {STEPS[4]} …")
+                corpus_dir = state.get("s1", {}).get("corpus_dir") or str(out / "corpus")
+                result = s4_extract_adjectives(corpus_dir, str(out), targets, log_fn=log_fn)
+                state["s4"] = result
+                self._w_put("log", "  ✅ 步骤4完成")
 
             if 5 in steps and targets.strip():
-                self._w_put("log", "[步骤5] 词性标注 + 中文翻译 …")
-                from jiacixing import ensure_nltk_data, guess_pos, Translator
-                adj_excel = out / "adjectives_phrases.xlsx"
-                if not adj_excel.exists():
+                self._w_put("log", f"[步骤5] {STEPS[5]} …")
+                adj_path = state.get("s4", {}).get("adj_excel_path") or str(out / "adjectives_phrases.xlsx")
+                if not Path(adj_path).exists():
                     self._w_put("log", "  ⚠ 形容词表不存在，跳过")
                 else:
-                    ensure_nltk_data()
-                    df_adj = pd.read_excel(str(adj_excel), sheet_name="Adjectives")
-                    translator = Translator(concurrency=5)
-                    words = df_adj["Adjective"].tolist()
-                    self._w_put("log", f"  标注 {len(words)} 词…")
-                    df_adj["POS"] = [guess_pos(None if pd.isna(w) else str(w)) for w in words]
-                    df_adj["中文意思"] = translator.translate_batch(["" if pd.isna(w) else str(w) for w in words])
-                    final_path = out / "adjectives_final.xlsx"
-                    df_adj.to_excel(str(final_path), index=False)
-                    self._w_put("log", f"  ✅ 步骤5完成: {final_path}")
+                    result = s5_pos_and_translate(adj_path, str(out), log_fn=log_fn)
+                    state["s5"] = result
+                    self._w_put("log", "  ✅ 步骤5完成")
 
-            self._w_put("done", f"全流程完成！\n输出目录: {out.absolute()}")
+            validation_paths = generate_validation_artifacts(out)
+            state["validation"] = validation_paths
+
+            run_config = build_run_config_from_gui(inp, str(out), targets, country, force, steps, state)
+            write_run_config(out, run_config)
+
+            self._w_put("done", f"全流程完成！\n输出目录: {out.absolute()}\n复核/验证材料: {out / '06_review'} ; {out / '07_reports'}")
 
         except Exception as e:
             import traceback
@@ -392,7 +387,7 @@ class TabMerge(ttk.Frame, WorkerMixin):
         self.log.clear()
 
         from config import MergeConfig
-        from hebing import run_hebing
+        from modules.hebing import run_hebing
         cfg = MergeConfig(
             fuzzy_threshold=self.threshold_var.get(),
             enable_country_lookup=self.country_var.get(),
@@ -503,7 +498,7 @@ class TabAdjectives(ttk.Frame, WorkerMixin):
         self.log.clear()
 
         from config import TxtAnalysisConfig
-        from txt_modifier_extractor_gui import process_txt, split_targets
+        from modules.txt_modifier_extractor_gui import process_txt, split_targets
 
         cfg = TxtAnalysisConfig(
             split_mode=self.split_var.get(),
@@ -639,7 +634,7 @@ class TabPOSTranslate(ttk.Frame, WorkerMixin):
 
         def worker():
             try:
-                from jiacixing import ensure_nltk_data, guess_pos, Translator
+                from modules.jiacixing import ensure_nltk_data, guess_pos, Translator
                 ensure_nltk_data()
                 words = df[word_col].tolist()
                 n = len(words)
@@ -708,7 +703,7 @@ class TabKWIC(ttk.Frame):
 
         def worker():
             try:
-                from KWICtoecxl import analyze_kwic
+                from modules.KWICtoecxl import analyze_kwic
                 df = analyze_kwic(inp)
                 df.to_excel(out, index=False)
                 self.log.log(f"✅ 完成: {out}")
@@ -915,4 +910,8 @@ class IntegratedApp(tk.Tk):
 
 
 if __name__ == "__main__":
+    main()
+
+
+def main():
     IntegratedApp().mainloop()

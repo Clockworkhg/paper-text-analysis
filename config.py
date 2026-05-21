@@ -20,7 +20,7 @@ class TxtAnalysisConfig:
     norm_freq_per: int = 10000
     norm_doc_per: int = 100
     use_online_judge: bool = False
-    openai_api_key: str = ""
+    openai_api_key: str = ""  # NEVER hardcode a real key; set via environment variable OPENAI_API_KEY
     openai_model: str = "gpt-4o-mini"
     online_batch_size: int = 20
     split_mode: str = "blanklines"

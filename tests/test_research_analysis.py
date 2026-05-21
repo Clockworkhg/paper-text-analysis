@@ -4,7 +4,7 @@ import pandas as pd
 
 from shared.research_output import write_excel_with_readme
 from shared.validation import create_validation_report, generate_validation_artifacts
-from txt_modifier_extractor_gui import (
+from modules.txt_modifier_extractor_gui import (
     log_likelihood_2x2,
     parse_doc_metadata,
     polarity_candidate,
