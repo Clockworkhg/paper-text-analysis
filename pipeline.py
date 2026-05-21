@@ -22,6 +22,9 @@ from pathlib import Path
 
 import pandas as pd
 
+from shared.research_output import build_run_config, write_excel_with_readme, write_run_config
+from shared.validation import generate_validation_artifacts
+
 
 STEPS = {
     1: "Lexis DOCX → TXT + 统计报告",
@@ -85,7 +88,17 @@ def s2_json_to_excel(report_path, out_dir):
         [{"Source": k, "Count": v} for k, v in sources.items()]
     ).sort_values("Count", ascending=False)
 
-    df.to_excel(str(excel_path), index=False)
+    write_excel_with_readme(
+        str(excel_path),
+        {"Sources": df},
+        title="Source counts from LexisNexis report",
+        description="Counts article frequency by original source name before source normalization and country inference.",
+        fields={
+            "Source": "Original source name reported in the LexisNexis export.",
+            "Count": "Number of articles associated with the source.",
+        },
+        parameters={"report_path": report_path, "out_dir": str(out)},
+    )
     print(f"  机构数: {len(df)}")
     print(f"  输出: {excel_path}")
     return {"excel_path": str(excel_path), "source_count": len(df)}
@@ -177,7 +190,9 @@ def s5_pos_and_translate(adj_excel_path, out_dir):
     out.mkdir(parents=True, exist_ok=True)
     final_excel = out / "adjectives_final.xlsx"
 
-    ensure_nltk_data()
+    nltk_ready = ensure_nltk_data()
+    if not nltk_ready:
+        print("  ⚠ NLTK data unavailable; POS labels will fall back to UNKNOWN.")
 
     df_adj = pd.read_excel(adj_excel_path, sheet_name="Adjectives")
     translator = Translator(concurrency=5)
@@ -194,7 +209,18 @@ def s5_pos_and_translate(adj_excel_path, out_dir):
     df_adj["POS"] = pos_list
     df_adj["中文意思"] = zh_list
 
-    df_adj.to_excel(str(final_excel), index=False)
+    write_excel_with_readme(
+        str(final_excel),
+        {"AdjectivesFinal": df_adj},
+        title="POS and translation enrichment for adjective candidates",
+        description="Adds automatic POS labels and Chinese translation helpers to adjective candidates.",
+        fields={
+            "Adjective": "Candidate adjective extracted near a target term.",
+            "POS": "Automatically guessed part of speech.",
+            "中文意思": "Automatic translation/helper meaning; review before interpretation.",
+        },
+        parameters={"input": adj_excel_path, "translator_concurrency": 5},
+    )
     print(f"  输出: {final_excel}")
     return {"final_excel_path": str(final_excel)}
 
@@ -239,6 +265,7 @@ def main():
 
     args = parser.parse_args()
     out_dir = Path(args.output)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     skip_set = {int(s.strip()) for s in args.skip.split(",") if s.strip()}
     only_set = {int(s.strip()) for s in args.only.split(",") if s.strip()}
@@ -263,7 +290,13 @@ def main():
             continue
         run_steps.append(s)
 
+    run_config = build_run_config(args, steps_to_run, run_steps)
+    run_config_path = write_run_config(out_dir, run_config)
+
     if not run_steps:
+        run_config["status"] = "skipped"
+        run_config["reason"] = "all requested outputs already exist"
+        write_run_config(out_dir, run_config)
         print("所有步骤已完成，无需运行。")
         return
 
@@ -273,6 +306,7 @@ def main():
     print(f"步骤: {run_steps}")
     print(f"目标: {args.targets or '(跳过修饰分析)'}")
     print(f"国别: {'开启' if args.country else '关闭'}")
+    print(f"运行记录: {run_config_path}")
     print(f"{'='*60}\n")
 
     state = {}
@@ -330,12 +364,21 @@ def main():
         failed = True
 
     if failed:
+        run_config["status"] = "failed"
+        run_config["state"] = state
+        write_run_config(out_dir, run_config)
         print(f"\n{'='*60}")
         print("流程中断，部分结果已保存到上一步。")
         sys.exit(1)
     else:
+        validation_paths = generate_validation_artifacts(out_dir)
+        state["validation"] = validation_paths
+        run_config["status"] = "completed"
+        run_config["state"] = state
+        write_run_config(out_dir, run_config)
         print(f"{'='*60}")
         print(f"✅ 全流程完成！输出目录: {out_dir.absolute()}")
+        print(f"复核/验证材料: {out_dir / '06_review'} ; {out_dir / '07_reports'}")
         print(f"{'='*60}")
 
 

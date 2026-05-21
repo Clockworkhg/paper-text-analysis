@@ -30,6 +30,7 @@ from shared.wikidata import sparql_candidates, pick_best_country
 from shared.io_utils import load_overrides, read_table
 from shared.pie_chart import save_pie
 from shared.gui_base import BaseApp
+from shared.research_output import write_excel_with_readme
 
 
 # =========================
@@ -442,12 +443,27 @@ def run_hebing(in_path: str, out_path: str, overrides_path: str = "",
         auto_df.to_csv(base + "_auto_overrides.csv", index=False, encoding="utf-8-sig")
         rowmap.to_csv(base + "_row_mapping.csv", index=False, encoding="utf-8-sig")
     else:
-        with pd.ExcelWriter(out_path, engine="openpyxl") as w:
-            with_country.to_excel(w, index=False, sheet_name="WithCountry")
-            cs.to_excel(w, index=False, sheet_name="CountrySummary")
-            suggested.to_excel(w, index=False, sheet_name="SuggestedOverrides")
-            auto_df.to_excel(w, index=False, sheet_name="AutoOverrides")
-            rowmap.to_excel(w, index=False, sheet_name="RowMapping")
+        write_excel_with_readme(
+            out_path,
+            {
+                "WithCountry": with_country,
+                "CountrySummary": cs,
+                "SuggestedOverrides": suggested,
+                "AutoOverrides": auto_df,
+                "RowMapping": rowmap,
+            },
+            title="Source merge and country inference",
+            description="Normalizes media source names, summarizes source countries, and records country-inference suggestions for human review.",
+            fields={
+                "Source_Merged": "Canonical source name after cleaning, hand rules, and fuzzy merging.",
+                "Count_Sum": "Article count after source-name merging.",
+                "Country": "Country/region assigned to the source; review before using as a research variable.",
+                "Suggested_Country": "Candidate country inferred by hand rules, heuristics, or Wikidata.",
+                "Confidence": "Heuristic confidence score for the suggested country.",
+                "Evidence_Top3": "Evidence summary used for the suggestion.",
+            },
+            parameters=cfg_dict,
+        )
 
     if verbose:
         print(f"扇形图：{png_path}")

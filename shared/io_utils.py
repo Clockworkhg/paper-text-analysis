@@ -4,6 +4,7 @@ from typing import Dict
 import pandas as pd
 
 from shared.normalization import normalize_basic
+from shared.research_output import write_excel_with_readme
 
 
 def read_table(path: str) -> pd.DataFrame:
@@ -22,7 +23,14 @@ def read_table(path: str) -> pd.DataFrame:
 def write_table(df: pd.DataFrame, path: str):
     ext = os.path.splitext(path)[1].lower()
     if ext in (".xlsx", ".xls"):
-        df.to_excel(path, index=False)
+        write_excel_with_readme(
+            path,
+            {"Data": df},
+            title="Table export",
+            description="Generic tabular export produced by the text-analysis toolkit.",
+            fields={col: "Exported data column." for col in df.columns},
+            parameters={"path": path},
+        )
     elif ext == ".csv":
         df.to_csv(path, index=False, encoding="utf-8-sig")
     else:

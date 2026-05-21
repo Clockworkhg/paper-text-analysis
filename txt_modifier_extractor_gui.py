@@ -16,8 +16,10 @@ python -m spacy download en_core_web_sm
 
 import os
 import re
+import math
 import threading
 import queue
+from collections import Counter, defaultdict
 from typing import List, Tuple, Dict, Set
 
 import pandas as pd
@@ -27,6 +29,7 @@ from tkinter import ttk, filedialog, messagebox
 from config import TxtAnalysisConfig
 
 from shared.normalization import normalize_word
+from shared.research_output import write_excel_with_readme
 
 try:
     import spacy
@@ -141,6 +144,95 @@ def chunk_long_docs(docs: List[str], max_chars: int = 200000) -> List[str]:
 # =========================
 
 Config = TxtAnalysisConfig  # alias for backward compatibility
+
+
+CONTENT_POS = {"ADJ", "NOUN", "PROPN", "VERB", "ADV"}
+POSITIVE_SEEDS = {
+    "able", "advanced", "beneficial", "better", "clean", "constructive", "credible",
+    "democratic", "effective", "efficient", "fair", "favorable", "good", "great",
+    "important", "innovative", "legitimate", "positive", "productive", "prosperous",
+    "reliable", "responsible", "safe", "significant", "stable", "strong", "successful",
+}
+NEGATIVE_SEEDS = {
+    "aggressive", "bad", "corrupt", "critical", "dangerous", "deadly", "difficult",
+    "harmful", "hostile", "illegal", "illegitimate", "negative", "poor", "problematic",
+    "risky", "severe", "threatening", "unstable", "violent", "weak", "worse", "worst",
+}
+
+
+def parse_doc_metadata(text: str) -> Dict[str, str]:
+    meta = {"Source": "Unknown", "Date": "", "Body": text}
+    body = text
+    if "----- BODY -----" in text:
+        header, body = text.split("----- BODY -----", 1)
+        meta["Body"] = body.strip()
+        for line in header.splitlines():
+            line = line.strip()
+            if line.startswith("<SOURCE>:"):
+                meta["Source"] = line.split(":", 1)[1].strip() or "Unknown"
+            elif line.startswith("<DATE>:"):
+                meta["Date"] = line.split(":", 1)[1].strip()
+    return meta
+
+
+def context_text(doc, start_i: int, end_i: int, window_tokens: int) -> Tuple[str, str, str]:
+    left = max(0, start_i - window_tokens)
+    right = min(len(doc), end_i + window_tokens)
+    return (
+        doc[left:start_i].text,
+        doc[start_i:end_i].text,
+        doc[end_i:right].text,
+    )
+
+
+def iter_collocates(doc, start_i: int, end_i: int, window_tokens: int):
+    left = max(0, start_i - window_tokens)
+    right = min(len(doc), end_i + window_tokens)
+    for tok in doc[left:right]:
+        if start_i <= tok.i < end_i:
+            continue
+        if tok.is_stop or tok.is_punct or tok.is_space:
+            continue
+        if tok.pos_ not in CONTENT_POS:
+            continue
+        lemma = normalize_word(tok.lemma_ or tok.text).lower()
+        if not lemma or len(lemma) < 2:
+            continue
+        yield lemma, tok.pos_
+
+
+def log_likelihood_2x2(k11: int, target_total: int, collocate_total: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    k12 = max(target_total - k11, 0)
+    k21 = max(collocate_total - k11, 0)
+    k22 = max(total - k11 - k12 - k21, 0)
+    row1 = k11 + k12
+    row2 = k21 + k22
+    col1 = k11 + k21
+    col2 = k12 + k22
+
+    def term(obs, exp):
+        return 0.0 if obs <= 0 or exp <= 0 else obs * math.log(obs / exp)
+
+    e11 = row1 * col1 / total
+    e12 = row1 * col2 / total
+    e21 = row2 * col1 / total
+    e22 = row2 * col2 / total
+    return 2 * (term(k11, e11) + term(k12, e12) + term(k21, e21) + term(k22, e22))
+
+
+def polarity_candidate(expression: str) -> Tuple[str, str]:
+    words = set(re.findall(r"[a-z]+", expression.lower()))
+    pos_hits = words & POSITIVE_SEEDS
+    neg_hits = words & NEGATIVE_SEEDS
+    if pos_hits and not neg_hits:
+        return "positive_candidate", "appraisal/semantic prosody cue"
+    if neg_hits and not pos_hits:
+        return "negative_candidate", "appraisal/semantic prosody cue"
+    if pos_hits and neg_hits:
+        return "mixed_candidate", "mixed appraisal cue"
+    return "uncoded_candidate", "requires KWIC review"
 
 
 def find_targets_in_doc(doc, targets: List[str]) -> List[Tuple[int, int, str]]:
@@ -305,6 +397,14 @@ def process_txt(
     adj_docs: Dict[str, Dict[str, Set[int]]] = {t: {} for t in targets}
     phrase_freq: Dict[str, Dict[str, int]] = {t: {} for t in targets}
     phrase_docs: Dict[str, Dict[str, Set[int]]] = {t: {} for t in targets}
+    collocate_freq: Dict[str, Counter] = {t: Counter() for t in targets}
+    collocate_docs: Dict[str, Dict[str, Set[int]]] = {t: defaultdict(set) for t in targets}
+    collocate_pos: Dict[str, Dict[str, Counter]] = {t: defaultdict(Counter) for t in targets}
+    collocate_examples: Dict[str, Dict[str, List[str]]] = {t: defaultdict(list) for t in targets}
+    corpus_token_freq = Counter()
+    target_hit_count = Counter()
+    kwic_rows = []
+    group_freq = defaultdict(Counter)
 
     total_tokens_corpus = 0
 
@@ -312,12 +412,24 @@ def process_txt(
     online_meta: List[Tuple[str, str, str, int]] = []  # kind, target, cand, docid
 
     # spacy.pipe 提速
-    for i, doc in enumerate(nlp.pipe(docs, batch_size=cfg.nlp_batch_size), start=0):
+    doc_metas = [parse_doc_metadata(d) for d in docs]
+    doc_bodies = [m["Body"] for m in doc_metas]
+
+    for i, doc in enumerate(nlp.pipe(doc_bodies, batch_size=cfg.nlp_batch_size), start=0):
         if progress_cb:
             progress_cb(i + 1, total_docs)
 
         text = doc.text
         total_tokens_corpus += token_count_approx(text)
+        meta = doc_metas[i]
+        source_group = meta.get("Source") or "Unknown"
+
+        for tok in doc:
+            if tok.is_stop or tok.is_punct or tok.is_space or tok.pos_ not in CONTENT_POS:
+                continue
+            lemma = normalize_word(tok.lemma_ or tok.text).lower()
+            if lemma and len(lemma) >= 2:
+                corpus_token_freq[lemma] += 1
 
         hits = find_targets_in_doc(doc, targets)
         if not hits:
@@ -325,7 +437,28 @@ def process_txt(
 
         docid = i
         for hit in hits:
-            _, _, t = hit
+            start_i, end_i, t = hit
+            target_hit_count[t] += 1
+            left_context, keyword, right_context = context_text(doc, start_i, end_i, cfg.window_tokens)
+            kwic_rows.append({
+                "Doc_ID": docid,
+                "Source": source_group,
+                "Date": meta.get("Date", ""),
+                "Target": t,
+                "Left_Context": left_context,
+                "Keyword": keyword,
+                "Right_Context": right_context,
+                "Full_Context": clean_phrase(f"{left_context} {keyword} {right_context}"),
+            })
+
+            for collocate, pos in iter_collocates(doc, start_i, end_i, cfg.collocate_window_tokens):
+                collocate_freq[t][collocate] += 1
+                collocate_docs[t][collocate].add(docid)
+                collocate_pos[t][collocate][pos] += 1
+                if len(collocate_examples[t][collocate]) < 3:
+                    collocate_examples[t][collocate].append(clean_phrase(f"{left_context} {keyword} {right_context}"))
+                group_freq[(source_group, t, "collocate", collocate)]["Frequency"] += 1
+
             adjs, phrases = extract_for_hit(doc, hit, cfg)
 
             for a in adjs:
@@ -333,6 +466,7 @@ def process_txt(
                     continue
                 adj_freq[t][a] = adj_freq[t].get(a, 0) + 1
                 adj_docs[t].setdefault(a, set()).add(docid)
+                group_freq[(source_group, t, "adjective", a)]["Frequency"] += 1
 
                 if cfg.use_online_judge:
                     online_pairs.append((text, t, a))
@@ -344,6 +478,7 @@ def process_txt(
                     continue
                 phrase_freq[t][p] = phrase_freq[t].get(p, 0) + 1
                 phrase_docs[t].setdefault(p, set()).add(docid)
+                group_freq[(source_group, t, "phrase", p)]["Frequency"] += 1
 
                 if cfg.use_online_judge:
                     online_pairs.append((text, t, p))
@@ -409,31 +544,121 @@ def process_txt(
                 "Modifier_Phrase": ph,
                 "Frequency": f,
                 "Doc_Frequency": dfreq,
+                f"Norm_Freq_per_{cfg.norm_freq_per}_words": (f / total_tokens_corpus * cfg.norm_freq_per) if total_tokens_corpus else 0,
+                f"Norm_DocFreq_per_{cfg.norm_doc_per}_docs": (dfreq / total_docs * cfg.norm_doc_per) if total_docs else 0,
             })
+
+    collocate_rows = []
+    for t in targets:
+        for collocate, f in sorted(collocate_freq[t].items(), key=lambda x: (-x[1], x[0])):
+            if f < cfg.collocate_min_freq:
+                continue
+            dfreq = len(collocate_docs[t].get(collocate, set()))
+            target_total = max(target_hit_count[t], 1)
+            collocate_total = max(corpus_token_freq.get(collocate, f), f)
+            mi = math.log2((f * max(total_tokens_corpus, 1)) / (target_total * collocate_total)) if f and collocate_total else 0
+            ll = log_likelihood_2x2(f, target_total, collocate_total, max(total_tokens_corpus, 1))
+            top_pos = collocate_pos[t][collocate].most_common(1)[0][0] if collocate_pos[t][collocate] else ""
+            collocate_rows.append({
+                "Target": t,
+                "Collocate": collocate,
+                "POS": top_pos,
+                "Frequency": f,
+                "Doc_Frequency": dfreq,
+                f"Norm_Freq_per_{cfg.norm_freq_per}_words": (f / total_tokens_corpus * cfg.norm_freq_per) if total_tokens_corpus else 0,
+                "MI_Score_Approx": round(mi, 4),
+                "Log_Likelihood_Approx": round(ll, 4),
+                "Example_Contexts": " || ".join(collocate_examples[t][collocate]),
+            })
+
+    semantic_rows = []
+    for row in adj_rows:
+        polarity, domain = polarity_candidate(str(row.get("Adjective", "")))
+        semantic_rows.append({
+            "Target": row["Target"],
+            "Kind": "adjective",
+            "Expression": row["Adjective"],
+            "Polarity_Candidate": polarity,
+            "Semantic_Domain_Candidate": domain,
+            "Frequency": row["Frequency"],
+            "Review_Status": "needs_kwic_review",
+        })
+    for row in phrase_rows:
+        polarity, domain = polarity_candidate(str(row.get("Modifier_Phrase", "")))
+        semantic_rows.append({
+            "Target": row["Target"],
+            "Kind": "phrase",
+            "Expression": row["Modifier_Phrase"],
+            "Polarity_Candidate": polarity,
+            "Semantic_Domain_Candidate": domain,
+            "Frequency": row["Frequency"],
+            "Review_Status": "needs_kwic_review",
+        })
+
+    group_rows = []
+    for (source, target, kind, expression), counter in sorted(group_freq.items()):
+        f = counter["Frequency"]
+        group_rows.append({
+            "Source_Group": source,
+            "Target": target,
+            "Kind": kind,
+            "Expression": expression,
+            "Frequency": f,
+            f"Norm_Freq_per_{cfg.norm_freq_per}_words": (f / total_tokens_corpus * cfg.norm_freq_per) if total_tokens_corpus else 0,
+        })
 
     df_adj = pd.DataFrame(adj_rows)
     df_phrase = pd.DataFrame(phrase_rows)
+    df_kwic = pd.DataFrame(kwic_rows)
+    df_collocate = pd.DataFrame(collocate_rows)
+    df_semantic = pd.DataFrame(semantic_rows)
+    df_group = pd.DataFrame(group_rows)
 
     if not output_path.lower().endswith(".xlsx"):
         output_path += ".xlsx"
 
-    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        df_adj.to_excel(writer, index=False, sheet_name="Adjectives")
-        df_phrase.to_excel(writer, index=False, sheet_name="Phrases")
-        meta = pd.DataFrame([{
-            "Input": input_path,
-            "Split_Mode": cfg.split_mode,
-            "Split_Regex_or_Mode": cfg.split_regex,
-            "Total_Docs": total_docs,
-            "Total_Tokens_Approx": total_tokens_corpus,
-            "Targets": "; ".join(targets),
-            "Online_Judge": cfg.use_online_judge,
-            "Window_Tokens": cfg.window_tokens,
-            "Phrase_Max_Tokens": cfg.phrase_max_tokens,
-            "SpaCy_BatchSize": cfg.nlp_batch_size,
-            "Max_Doc_Chars": cfg.max_doc_chars
-        }])
-        meta.to_excel(writer, index=False, sheet_name="Meta")
+    meta = pd.DataFrame([{
+        "Input": input_path,
+        "Split_Mode": cfg.split_mode,
+        "Split_Regex_or_Mode": cfg.split_regex,
+        "Total_Docs": total_docs,
+        "Total_Tokens_Approx": total_tokens_corpus,
+        "Targets": "; ".join(targets),
+        "Online_Judge": cfg.use_online_judge,
+        "Window_Tokens": cfg.window_tokens,
+        "Collocate_Window_Tokens": cfg.collocate_window_tokens,
+        "Collocate_Min_Freq": cfg.collocate_min_freq,
+        "Phrase_Max_Tokens": cfg.phrase_max_tokens,
+        "SpaCy_BatchSize": cfg.nlp_batch_size,
+        "Max_Doc_Chars": cfg.max_doc_chars
+    }])
+    write_excel_with_readme(
+        output_path,
+        {
+            "Adjectives": df_adj,
+            "Phrases": df_phrase,
+            "KWIC": df_kwic,
+            "Collocates": df_collocate,
+            "SemanticProsodyCandidates": df_semantic,
+            "GroupComparison": df_group,
+            "Meta": meta,
+        },
+        title="Target modifier and phrase candidates",
+        description="Extracts adjective and phrase candidates around target words for collocation, semantic prosody, and appraisal analysis.",
+        fields={
+            "Target": "Research target term.",
+            "Adjective": "Candidate adjective occurring in a syntactic/window relation to the target.",
+            "Modifier_Phrase": "Candidate phrase/chunk occurring near the target.",
+            "Collocate": "Content-word candidate occurring inside the target context window.",
+            "MI_Score_Approx": "Approximate mutual information score for target-collocate association.",
+            "Log_Likelihood_Approx": "Approximate log-likelihood association score.",
+            "Polarity_Candidate": "Seed-lexicon candidate label; not a final interpretation.",
+            "Source_Group": "Source metadata parsed from Lexis TXT headers when available.",
+            "Frequency": "Number of observed occurrences.",
+            "Doc_Frequency": "Number of documents in which the candidate appears.",
+        },
+        parameters=meta.iloc[0].to_dict(),
+    )
 
     if log_cb:
         log_cb(f"完成 ✅ 导出：{output_path}")

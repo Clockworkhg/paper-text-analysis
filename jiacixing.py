@@ -13,32 +13,48 @@ import nltk
 from nltk.corpus import wordnet as wn
 
 from shared.normalization import normalize_word
+from shared.research_output import write_excel_with_readme
+
+NLTK_READY = None
 
 
-def ensure_nltk_data():
+def ensure_nltk_data(auto_download: bool = False) -> bool:
+    global NLTK_READY
     resources = [
         ("corpora/wordnet", "wordnet"),
         ("corpora/omw-1.4", "omw-1.4"),
         ("taggers/averaged_perceptron_tagger", "averaged_perceptron_tagger"),
         ("tokenizers/punkt", "punkt"),
     ]
+    ok = True
     for path, name in resources:
         try:
             nltk.data.find(path)
         except LookupError:
-            nltk.download(name, quiet=True)
+            if not auto_download or not nltk.download(name, quiet=True):
+                ok = False
+    NLTK_READY = ok
+    return ok
 
 
 def guess_pos(word: str) -> str:
+    global NLTK_READY
     word = normalize_word(word)
     if not word:
         return ""
 
-    synsets = wn.synsets(word)
-    if synsets:
-        p = synsets[0].pos()
-        mapping = {"n": "NOUN", "v": "VERB", "a": "ADJ", "s": "ADJ", "r": "ADV"}
-        return mapping.get(p, p.upper())
+    if NLTK_READY is False:
+        return "UNKNOWN"
+
+    try:
+        synsets = wn.synsets(word)
+        if synsets:
+            p = synsets[0].pos()
+            mapping = {"n": "NOUN", "v": "VERB", "a": "ADJ", "s": "ADJ", "r": "ADV"}
+            return mapping.get(p, p.upper())
+    except LookupError:
+        NLTK_READY = False
+        return "UNKNOWN"
 
     try:
         from nltk import pos_tag, word_tokenize
@@ -352,7 +368,17 @@ class App(tk.Tk):
             if out_path.lower().endswith(".csv"):
                 df.to_csv(out_path, index=False, encoding="utf-8-sig")
             else:
-                df.to_excel(out_path, index=False)
+                write_excel_with_readme(
+                    out_path,
+                    {"Data": df},
+                    title="POS and translation enrichment",
+                    description="Adds automatic POS labels and Chinese translation helpers to word candidates.",
+                    fields={
+                        "POS": "Automatically guessed part of speech.",
+                        "中文意思": "Automatic translation/helper meaning; review before interpretation.",
+                    },
+                    parameters={"input": self.file_path or "", "translate_enabled": do_translate},
+                )
         except Exception as e:
             self.msg_queue.put(("error", f"导出失败：{e}"))
             return

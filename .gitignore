@@ -15,11 +15,15 @@ env/
 
 # Local caches and generated runtime data
 .cache/
+.ocr_deps/
 .tldextract_cache/
 output/
 outputs/
 dist/
 build/
+
+# Local research materials
+文献/
 
 # Editor and OS files
 .idea/
@@ -31,4 +35,3 @@ Thumbs.db
 *.log
 *.tmp
 ~$*
-

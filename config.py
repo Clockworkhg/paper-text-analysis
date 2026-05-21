@@ -27,3 +27,5 @@ class TxtAnalysisConfig:
     split_regex: str = ""
     nlp_batch_size: int = 64
     max_doc_chars: int = 200000
+    collocate_window_tokens: int = 5
+    collocate_min_freq: int = 2

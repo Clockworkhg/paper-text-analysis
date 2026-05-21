@@ -4,6 +4,7 @@ import pandas as pd
 import spacy
 from collections import defaultdict
 import os
+from shared.research_output import write_excel_with_readme
 
 try:
     nlp = spacy.load("en_core_web_sm")
@@ -57,6 +58,7 @@ def analyze_kwic(file_path):
     data_lines = lines[start_line:]
 
     records = []
+    kwic_rows = []
     for line in data_lines:
         parts = line.strip().split("\t")
         if len(parts) < 4:
@@ -67,6 +69,14 @@ def analyze_kwic(file_path):
         right = parts[3]
         full_text = left + " " + hit + " " + right
         records.append((file_name, hit.lower().split(), full_text))
+        kwic_rows.append({
+            "File": file_name,
+            "Target": hit,
+            "Left_Context": left,
+            "Keyword": hit,
+            "Right_Context": right,
+            "Full_Context": full_text,
+        })
 
     texts = [r[2] for r in records]
     for (file_name, hit_tokens, full_text), doc in zip(records, nlp.pipe(texts, batch_size=128)):
@@ -111,6 +121,33 @@ def analyze_kwic(file_path):
     return df
 
 
+def analyze_kwic_sheets(file_path):
+    summary = analyze_kwic(file_path)
+    with open(file_path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+
+    start_line = 1
+    if lines:
+        first_parts = lines[0].strip().split("\t")
+        if not _is_header_line(first_parts, 0):
+            start_line = 0
+
+    rows = []
+    for line in lines[start_line:]:
+        parts = line.strip().split("\t")
+        if len(parts) < 4:
+            continue
+        rows.append({
+            "File": parts[0],
+            "Target": parts[2].strip(),
+            "Left_Context": parts[1],
+            "Keyword": parts[2].strip(),
+            "Right_Context": parts[3],
+            "Full_Context": f"{parts[1]} {parts[2].strip()} {parts[3]}",
+        })
+    return {"KWIC": pd.DataFrame(rows), "AdjectiveSummary": summary}
+
+
 def run_gui():
     root = tk.Tk()
     root.title("KWIC 修饰形容词分析工具")
@@ -140,8 +177,21 @@ def run_gui():
             return
 
         try:
-            df = analyze_kwic(selected_file.get())
-            df.to_excel(output_path.get(), index=False)
+            sheets = analyze_kwic_sheets(selected_file.get())
+            write_excel_with_readme(
+                output_path.get(),
+                sheets,
+                title="KWIC analysis",
+                description="Converts KWIC-style text into a structured Excel table for contextual discourse reading.",
+                fields={
+                    "Left_Context": "Text to the left of the keyword.",
+                    "Keyword": "Keyword or target expression.",
+                    "Right_Context": "Text to the right of the keyword.",
+                    "Full_Context": "Combined KWIC context for close reading.",
+                    "Adjective": "Candidate adjective summary extracted from KWIC rows.",
+                },
+                parameters={"input": selected_file.get()},
+            )
             messagebox.showinfo("完成", "分析完成，已导出Excel文件！")
         except Exception as e:
             messagebox.showerror("错误", str(e))

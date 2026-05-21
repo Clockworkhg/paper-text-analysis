@@ -4,8 +4,8 @@ from docx import Document
 from datetime import datetime
 import json
 
-from app.utils import safe_filename, safe_foldername
-from app.rules import extract_metadata, extract_body, get_canonical_source
+from .utils import safe_filename, safe_foldername
+from .rules import extract_metadata, extract_body, get_canonical_source
 
 def preflight_check(full_text: str):
     """

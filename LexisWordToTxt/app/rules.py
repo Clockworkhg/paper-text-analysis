@@ -5,9 +5,9 @@ import re
 
 import json
 
-from app.constants import DATE_LINE_RE
+from .constants import DATE_LINE_RE
 # 如果函数里用了 DEFAULT_SOURCE_CANONICAL_MAP / DEFAULT_NOISE_KEYWORDS
-from app.constants import DEFAULT_SOURCE_CANONICAL_MAP, DEFAULT_NOISE_KEYWORDS
+from .constants import DEFAULT_SOURCE_CANONICAL_MAP, DEFAULT_NOISE_KEYWORDS
 
 def extract_metadata(article_text: str):
     """
