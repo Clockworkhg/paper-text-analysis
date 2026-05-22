@@ -21,6 +21,8 @@ runtime is organized around a small number of stable layers.
 - `modules/gui_tool_tabs.py` contains small standalone utility tabs that do not
   need the full project-workbench context, such as KWIC conversion, column
   merge, and JSON-to-Excel conversion.
+- `modules/gui_result_browser.py` contains the result workbook browser,
+  inline review annotation UI, and validation-report export UI.
 - `integrated_app.py` now focuses on composing the application and defining the
   current tool tabs.
 
