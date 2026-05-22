@@ -18,6 +18,9 @@ runtime is organized around a small number of stable layers.
 - `modules/gui_support.py` contains shared Tkinter support code: color tokens,
   icon loading, file picker rows, log panels, worker polling, and the base
   `ToolTab` class.
+- `modules/gui_tool_tabs.py` contains small standalone utility tabs that do not
+  need the full project-workbench context, such as KWIC conversion, column
+  merge, and JSON-to-Excel conversion.
 - `integrated_app.py` now focuses on composing the application and defining the
   current tool tabs.
 
