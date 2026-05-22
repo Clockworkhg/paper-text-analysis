@@ -1,14 +1,20 @@
-# 论文文本分析工具集
+# CADS Workbench
 
-这是一个面向新闻/论文语料的语料库辅助话语研究工具集。它支持 LexisNexis DOCX 拆分、来源机构统计、机构合并与国别识别、KWIC、搭配/共现、修饰语与短语提取、语义韵候选、人工复核和验证报告。
+Corpus-assisted discourse analysis tools for research-grade text analysis.
 
-项目的方法定位是：
+The project supports LexisNexis DOCX splitting, generic corpus import, source
+normalization, country inference, KWIC, collocation, modifier and phrase
+extraction, semantic-prosody candidates, group comparison, human review
+templates, and validation reports.
 
-> Corpus-Assisted Discourse Studies (CADS) + Critical Discourse Analysis (CDA) + KWIC/Collocation/Semantic Prosody + Appraisal/Framing Analysis
+Method position:
 
-## 快速开始
+> Corpus-Assisted Discourse Studies (CADS) + Critical Discourse Analysis
+> (CDA) + KWIC/Collocation/Semantic Prosody + Appraisal/Framing Analysis
 
-安装依赖：
+## Quick Start
+
+Install dependencies:
 
 ```powershell
 python -m venv .venv
@@ -17,78 +23,86 @@ python -m pip install -r requirements.txt
 python -m spacy download en_core_web_sm
 ```
 
-运行完整研究流程：
+Run a LexisNexis DOCX pipeline:
 
 ```powershell
 python research_tool.py run -i corpus.docx -o output -t "China; India; Global South" --no-country
 ```
 
-刷新人工复核模板和验证报告：
+Import a generic TXT/DOCX folder or CSV/Excel table:
+
+```powershell
+python research_tool.py import -i raw_texts -o output --corpus-type policy -t "risk; responsibility"
+python research_tool.py analyze -o output -t "risk; responsibility"
+```
+
+Generate review templates and validation reports:
 
 ```powershell
 python research_tool.py review output --sample-size 50
 ```
 
-查看关键文档：
-
-```powershell
-python research_tool.py docs
-```
-
-运行测试：
+Run tests:
 
 ```powershell
 python research_tool.py test
 ```
 
-更多示例见 [examples/QUICKSTART.md](examples/QUICKSTART.md)。
+## Main Entry Points
 
-## 主要入口
+- `research_tool.py`: primary CLI for daily use.
+- `integrated_app.py`: Tkinter desktop application.
+- `pipeline.py`: legacy full-pipeline CLI.
+- `tools/ocr_scanned_pdfs.py`: OCR helper for scanned PDFs.
 
-- `research_tool.py`：统一 CLI，推荐日常使用。
-- `integrated_app.py`：集成式 Tkinter 图形界面。
-- `pipeline.py`：底层全流程命令行脚本。
-- `tools/generate_validation_artifacts.py`：单独生成复核模板与验证报告。
-- `tools/ocr_scanned_pdfs.py`：对配置好的扫描版文献 PDF 进行 OCR。
+## Main Outputs
 
-## 核心输出
-
-完整运行后，输出目录会包含：
+A full run writes files such as:
 
 ```text
 output/
-├── run_config.json
-├── 00_run_config/
-├── 06_review/
-├── 07_reports/
-├── source_counts.xlsx
-├── merged_sources.xlsx
-├── adjectives_phrases.xlsx
-└── adjectives_final.xlsx
+  run_config.json
+  00_run_config/
+  01_corpus/
+  06_review/
+  07_reports/
+  corpus/
+  source_counts.xlsx
+  merged_sources.xlsx
+  adjectives_phrases.xlsx
+  adjectives_final.xlsx
 ```
 
-其中 `adjectives_phrases.xlsx` 是核心研究工作簿：
+The main analysis workbook, `adjectives_phrases.xlsx`, includes:
 
-- `KWIC`：目标词左右上下文。
-- `Adjectives`：目标词附近形容词候选。
-- `Phrases`：目标词附近短语/词块候选。
-- `Collocates`：目标词窗口内共现词及近似关联强度。
-- `SemanticProsodyCandidates`：语义韵/评价倾向候选标签。
-- `GroupComparison`：按来源组比较候选表达。
-- `README`：字段和方法说明。
+- `KWIC`: target-term contexts.
+- `Adjectives`: adjective/modifier candidates near target terms.
+- `Phrases`: phrase and lexical-bundle candidates.
+- `Collocates`: window-based co-occurrence candidates with MI and
+  log-likelihood scores.
+- `SemanticProsodyCandidates`: candidate polarity/domain hints for review.
+- `GroupComparison`: grouped source/corpus comparison.
+- `README` and `Meta`: field notes and run parameters.
 
-## 研究文档
+## Documentation
 
-- [docs/METHODOLOGY.md](docs/METHODOLOGY.md)：方法论说明。
-- [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md)：输出字段字典。
-- [docs/WORKFLOW.md](docs/WORKFLOW.md)：标准研究流程。
-- [docs/VALIDATION.md](docs/VALIDATION.md)：人工复核与验证说明。
-- [docs/LITERATURE_CLASSIFICATION.md](docs/LITERATURE_CLASSIFICATION.md)：文献分类。
-- [docs/literature_notes/00_INDEX.md](docs/literature_notes/00_INDEX.md)：逐篇文献笔记索引。
+- [Workflow](docs/WORKFLOW.md)
+- [Project Workflow](docs/PROJECT_WORKFLOW.md)
+- [Multi-Corpus Import](docs/MULTI_CORPUS_IMPORT.md)
+- [Methodology](docs/METHODOLOGY.md)
+- [Data Dictionary](docs/DATA_DICTIONARY.md)
+- [Validation](docs/VALIDATION.md)
+- [Research Templates](docs/RESEARCH_TEMPLATES.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Maintenance](docs/MAINTENANCE.md)
 
-## 注意事项
+## Repository Hygiene
 
-- 自动输出是候选证据，不是最终解释。关键结论应回到 KWIC/原文上下文复核。
-- 国别识别是辅助变量，建议对高频来源进行人工检查。
-- 语义韵候选标签基于种子词表，只能作为线索。
-- `文献/`、`.ocr_deps/`、`.cache/`、输出目录和本地缓存默认不会进入 git。
+Generated outputs, local projects, caches, build products, virtual
+environments, OCR logs, and private research materials are ignored by default.
+Keep reproducible examples in `examples/`; keep local analysis runs in
+`projects/`, `output/`, `outputs/`, `runtime/`, or `workspace/`.
+
+Automated outputs are candidate evidence, not final interpretation. Important
+claims should be checked against KWIC/context evidence and documented human
+review.

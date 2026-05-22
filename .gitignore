@@ -19,13 +19,23 @@ env/
 .tldextract_cache/
 output/
 outputs/
+runtime/
+workspace/
+projects/
 dist/
 build/
+*.egg-info/
 
 # Local research materials
 文献/
+新文献/
+素材/
+系统性竞争对手/
+literature_raw/
+ocr_output/
 
 # Editor and OS files
+.claude/
 .idea/
 .vscode/
 .DS_Store
@@ -35,11 +45,10 @@ Thumbs.db
 *.log
 *.tmp
 ~$*
+ocr_error.log
+ocr_progress.log
 
 # Build artifacts
-*.egg-info/
-dist/
-build/
 *.spec
 
 # Local app settings (may contain user paths)
