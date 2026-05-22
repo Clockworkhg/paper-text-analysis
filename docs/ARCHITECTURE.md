@@ -26,6 +26,8 @@ runtime is organized around a small number of stable layers.
 - `modules/gui_project_workbench.py` contains the project workflow tab for
   project initialization, import, analysis, review generation, report creation,
   status display, and project output opening.
+- `modules/gui_pipeline_tabs.py` contains the Lexis pipeline, source merge,
+  modifier analysis, and POS/translation tool tabs.
 - `integrated_app.py` now focuses on composing the application and defining the
   current tool tabs.
 
