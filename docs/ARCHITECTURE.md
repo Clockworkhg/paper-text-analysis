@@ -30,10 +30,11 @@ runtime is organized around a small number of stable layers.
 
 ## Analysis Layer
 
-- `modules/txt_modifier_extractor_gui.py` currently contains both the main text
-  analysis engine and a legacy GUI tab. Its `process_txt` function produces
-  KWIC, adjective, phrase, collocate, semantic-prosody, and group-comparison
-  sheets.
+- `modules/txt_modifier_extractor.py` contains the main text analysis engine.
+  Its `process_txt` function produces KWIC, adjective, phrase, collocate,
+  semantic-prosody, and group-comparison sheets.
+- `modules/txt_modifier_extractor_gui.py` is a compatibility wrapper and
+  standalone Tkinter GUI for the analysis engine.
 - `modules/hebing.py`, `modules/jiacixing.py`, and related modules are legacy
   processing steps. They should be treated as implementation modules, not new
   public APIs.
@@ -54,8 +55,7 @@ Pipeline and project outputs are generated into an output or project directory:
 The next refactor phases should keep behavior stable while reducing cognitive
 load:
 
-1. Split analysis logic out of `modules/txt_modifier_extractor_gui.py`.
-2. Split `integrated_app.py` into GUI tabs, widgets, and styles.
-3. Move stable modules into a package namespace such as `cads_workbench`.
-4. Keep thin compatibility wrappers for old script/module names until users and
+1. Split `integrated_app.py` into GUI tabs, widgets, and styles.
+2. Move stable modules into a package namespace such as `cads_workbench`.
+3. Keep thin compatibility wrappers for old script/module names until users and
    documentation have migrated.
