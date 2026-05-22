@@ -13,6 +13,14 @@ runtime is organized around a small number of stable layers.
   project-level work to `shared.project_workflow`.
 - `pipeline.py` is a legacy command-line pipeline kept for compatibility.
 
+## GUI Support
+
+- `modules/gui_support.py` contains shared Tkinter support code: color tokens,
+  icon loading, file picker rows, log panels, worker polling, and the base
+  `ToolTab` class.
+- `integrated_app.py` now focuses on composing the application and defining the
+  current tool tabs.
+
 ## Core Layers
 
 - `shared/project_workflow.py` coordinates project creation, import, analysis,
@@ -55,7 +63,7 @@ Pipeline and project outputs are generated into an output or project directory:
 The next refactor phases should keep behavior stable while reducing cognitive
 load:
 
-1. Split `integrated_app.py` into GUI tabs, widgets, and styles.
+1. Split concrete `integrated_app.py` tabs into GUI tab modules.
 2. Move stable modules into a package namespace such as `cads_workbench`.
 3. Keep thin compatibility wrappers for old script/module names until users and
    documentation have migrated.
