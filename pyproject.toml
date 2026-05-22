@@ -61,6 +61,7 @@ py-modules = ["research_tool", "pipeline", "integrated_app", "config"]
 packages = [
     "shared",
     "modules",
+    "modules.gui",
     "LexisWordToTxt",
     "LexisWordToTxt.app",
     "LexisWordToTxt.app.gui",

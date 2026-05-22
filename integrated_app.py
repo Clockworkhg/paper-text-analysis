@@ -11,11 +11,11 @@ import sys
 from pathlib import Path
 
 
-from modules.gui_support import COLORS, set_window_icon
-from modules.gui_project_workbench import TabProjectWorkbench
-from modules.gui_pipeline_tabs import TabAdjectives, TabMerge, TabPipeline, TabPOSTranslate
-from modules.gui_result_browser import TabResultBrowser
-from modules.gui_tool_tabs import TabColumnMerge, TabJSONtoExcel, TabKWIC
+from modules.gui.support import COLORS, set_window_icon
+from modules.gui.project_workbench import TabProjectWorkbench
+from modules.gui.pipeline_tabs import TabAdjectives, TabMerge, TabPipeline, TabPOSTranslate
+from modules.gui.result_browser import TabResultBrowser
+from modules.gui.tool_tabs import TabColumnMerge, TabJSONtoExcel, TabKWIC
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox

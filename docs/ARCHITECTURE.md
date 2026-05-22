@@ -15,19 +15,20 @@ runtime is organized around a small number of stable layers.
 
 ## GUI Support
 
-- `modules/gui_support.py` contains shared Tkinter support code: color tokens,
+- `modules/gui/support.py` contains shared Tkinter support code: color tokens,
   icon loading, file picker rows, log panels, worker polling, and the base
   `ToolTab` class.
-- `modules/gui_tool_tabs.py` contains small standalone utility tabs that do not
+- `modules/gui/tool_tabs.py` contains small standalone utility tabs that do not
   need the full project-workbench context, such as KWIC conversion, column
   merge, and JSON-to-Excel conversion.
-- `modules/gui_result_browser.py` contains the result workbook browser,
-  inline review annotation UI, and validation-report export UI.
-- `modules/gui_project_workbench.py` contains the project workflow tab for
+- `modules/gui/result_browser.py` contains the result workbook browser, inline
+  review annotation UI, and validation-report export UI.
+- `modules/gui/project_workbench.py` contains the project workflow tab for
   project initialization, import, analysis, review generation, report creation,
   status display, and project output opening.
-- `modules/gui_pipeline_tabs.py` contains the Lexis pipeline, source merge,
+- `modules/gui/pipeline_tabs.py` contains the Lexis pipeline, source merge,
   modifier analysis, and POS/translation tool tabs.
+- The older `modules/gui_*.py` files remain as compatibility wrappers.
 - `integrated_app.py` now focuses on composing the application and defining the
   current tool tabs.
 
