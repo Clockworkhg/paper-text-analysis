@@ -23,6 +23,9 @@ runtime is organized around a small number of stable layers.
   merge, and JSON-to-Excel conversion.
 - `modules/gui_result_browser.py` contains the result workbook browser,
   inline review annotation UI, and validation-report export UI.
+- `modules/gui_project_workbench.py` contains the project workflow tab for
+  project initialization, import, analysis, review generation, report creation,
+  status display, and project output opening.
 - `integrated_app.py` now focuses on composing the application and defining the
   current tool tabs.
 
