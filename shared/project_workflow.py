@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from argparse import Namespace
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -18,6 +19,17 @@ from shared.validation import generate_validation_artifacts
 
 
 PROJECT_FILE = "project.json"
+
+
+def _safe_console_print(message: str) -> None:
+    """Print progress text even when the Windows console uses a narrow encoding."""
+    text = str(message)
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        encoding = sys.stdout.encoding or "utf-8"
+        safe = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+        print(safe)
 
 
 def project_path(path: str | Path) -> Path:
@@ -185,7 +197,7 @@ def project_analyze(
     state: Dict[str, Any] = {"corpus_model": model}
 
     def _log(msg: str) -> None:
-        print(msg)
+        _safe_console_print(msg)
 
     state["s4"] = s4_extract_adjectives(str(corpus), str(root), targets, log_fn=_log, mi_threshold=mi_threshold)
     outputs = {"analysis_output": state["s4"]["adj_excel_path"], **model}
