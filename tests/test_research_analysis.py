@@ -12,10 +12,17 @@ from modules.txt_modifier_extractor_gui import (
 
 
 def test_parse_doc_metadata_with_lexis_headers():
-    text = "<SOURCE>: BBC | Reuters\n<DATE>: 2024-01-02\n\n----- BODY -----\n\nChina is important."
+    text = (
+        "<DOCUMENT_ID>: doc_123\n<CORPUS_ID>: corpus_abc\n<RUN_ID>: run_xyz\n"
+        "<TITLE>: Story\n<SOURCE>: BBC | Reuters\n<DATE>: 2024-01-02\n\n----- BODY -----\n\nChina is important."
+    )
     meta = parse_doc_metadata(text)
     assert meta["Source"] == "BBC | Reuters"
     assert meta["Date"] == "2024-01-02"
+    assert meta["Title"] == "Story"
+    assert meta["Document_ID"] == "doc_123"
+    assert meta["Corpus_ID"] == "corpus_abc"
+    assert meta["Run_ID"] == "run_xyz"
     assert meta["Body"] == "China is important."
 
 

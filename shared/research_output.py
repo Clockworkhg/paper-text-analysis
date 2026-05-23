@@ -1,4 +1,5 @@
 import json
+import hashlib
 import platform
 import subprocess
 import sys
@@ -8,12 +9,20 @@ from typing import Any, Dict, Iterable, Mapping, Optional
 
 import pandas as pd
 
+from shared.research_templates import normalize_template_name
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def stable_id(prefix: str, *parts: Any, length: int = 12) -> str:
+    seed = "\n".join("" if part is None else str(part) for part in parts)
+    digest = hashlib.sha1(seed.encode("utf-8", errors="ignore")).hexdigest()[:length]
+    return f"{prefix}_{digest}"
 
 
 def _run_command(args: Iterable[str]) -> str:
@@ -85,8 +94,16 @@ def ensure_research_dirs(out_dir: Path) -> Dict[str, str]:
 
 def build_run_config(args: Any, steps_to_run: Iterable[int], run_steps: Iterable[int]) -> Dict[str, Any]:
     out_dir = Path(args.output)
+    created_at = now_iso()
+    corpus_type = normalize_template_name(getattr(args, "corpus_type", "news_lexis") or "news_lexis")
+    corpus_id = stable_id("corpus", str(Path(args.input).absolute()), corpus_type)
+    run_id = stable_id("run", corpus_id, created_at, getattr(args, "targets", ""))
     return {
-        "created_at": now_iso(),
+        "created_at": created_at,
+        "run_id": run_id,
+        "corpus_id": corpus_id,
+        "model_version": "1.0",
+        "corpus_type": corpus_type,
         "project": "论文文本分析工具集",
         "research_positioning": "Corpus-Assisted Discourse Studies (CADS) with CDA, collocation, semantic prosody, and appraisal/framing analysis.",
         "input": str(Path(args.input).absolute()),
@@ -101,7 +118,7 @@ def build_run_config(args: Any, steps_to_run: Iterable[int], run_steps: Iterable
         "environment": environment_snapshot(),
         "output_layout": ensure_research_dirs(out_dir),
         "method_note": (
-            "Automated outputs are candidate evidence for corpus-assisted discourse analysis. "
+            "Automated outputs are candidate evidence for corpus-assisted research. "
             "Final interpretations should be checked against KWIC/concordance context and, where relevant, human review."
         ),
     }

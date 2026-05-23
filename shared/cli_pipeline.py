@@ -7,6 +7,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
+from shared.corpus_model import write_corpus_model
 from shared.pipeline_steps import (
     STEPS,
     check_step_done,
@@ -64,6 +65,7 @@ def run_cli_pipeline(args: Any, *, log: Callable[[str], None] = print) -> int:
     force = bool(getattr(args, "force", False))
     country = _country_enabled(args)
     setattr(args, "country", country)
+    corpus_type = getattr(args, "corpus_type", "news_lexis")
     requested_steps = parse_step_selection(getattr(args, "skip", ""), getattr(args, "only", ""))
     run_steps = runnable_steps(requested_steps, out_dir, targets=targets, force=force, log=log)
 
@@ -71,6 +73,15 @@ def run_cli_pipeline(args: Any, *, log: Callable[[str], None] = print) -> int:
     run_config_path = write_run_config(out_dir, run_config)
 
     if not run_steps:
+        if (out_dir / "corpus").exists():
+            run_config["corpus_model"] = write_corpus_model(
+                out_dir,
+                input_path=args.input,
+                targets=targets,
+                corpus_type=corpus_type,
+                corpus_id=run_config.get("corpus_id"),
+                run_id=run_config.get("run_id"),
+            )
         run_config["status"] = "skipped"
         run_config["reason"] = "all requested outputs already exist"
         write_run_config(out_dir, run_config)
@@ -81,7 +92,7 @@ def run_cli_pipeline(args: Any, *, log: Callable[[str], None] = print) -> int:
 
     state: Dict[str, Any] = {}
     try:
-        _run_selected_steps(args, out_dir, run_steps, country, state, log)
+        _run_selected_steps(args, out_dir, run_steps, country, corpus_type, run_config, state, log)
     except KeyboardInterrupt:
         log("\nInterrupted by user.")
         _write_failed_config(out_dir, run_config, state)
@@ -139,6 +150,8 @@ def _run_selected_steps(
     out_dir: Path,
     run_steps: List[int],
     country: bool,
+    corpus_type: str,
+    run_config: Dict[str, Any],
     state: Dict[str, Any],
     log: Callable[[str], None],
 ) -> None:
@@ -147,6 +160,15 @@ def _run_selected_steps(
     if 1 in run_steps:
         log(f"[Step 1] {STEPS[1]}")
         state["s1"] = s1_docx_to_txt(args.input, str(out_dir), log_fn=log)
+        state["corpus_model"] = write_corpus_model(
+            out_dir,
+            input_path=args.input,
+            targets=targets,
+            corpus_type=corpus_type,
+            corpus_id=run_config.get("corpus_id"),
+            run_id=run_config.get("run_id"),
+            corpus_dir=Path(state["s1"]["corpus_dir"]),
+        )
         log("")
 
     if 2 in run_steps:

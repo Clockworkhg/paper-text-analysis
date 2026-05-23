@@ -158,6 +158,7 @@ def s4_extract_adjectives(
     out_dir: str,
     targets: str,
     log_fn: Optional[Callable[[str], None]] = None,
+    mi_threshold: float = 3.0,
 ) -> Dict[str, Any]:
     from config import TxtAnalysisConfig
     from modules.txt_modifier_extractor_gui import process_txt, split_targets
@@ -169,6 +170,19 @@ def s4_extract_adjectives(
     all_txt_files = list(corpus.rglob("*.txt"))
     if not all_txt_files:
         raise MissingPreconditionError(f"\u8bed\u6599\u76ee\u5f55 {corpus_dir} \u4e0b\u672a\u627e\u5230 TXT \u6587\u4ef6")
+    all_txt_files = sorted(all_txt_files)
+
+    registry: Dict[str, Dict[str, Any]] = {}
+    registry_path = out / "01_corpus" / "documents.csv"
+    if registry_path.exists():
+        try:
+            reg_df = pd.read_csv(registry_path)
+            for _, row in reg_df.iterrows():
+                rel = str(row.get("relative_path", "")).replace("\\", "/")
+                if rel:
+                    registry[rel] = row.to_dict()
+        except Exception:
+            registry = {}
 
     merged_txt = out / "_corpus_merged.txt"
     skipped = 0
@@ -176,6 +190,19 @@ def s4_extract_adjectives(
         for tf in all_txt_files:
             try:
                 content = tf.read_text(encoding="utf-8", errors="ignore")
+                rel = tf.relative_to(corpus).as_posix()
+                meta = registry.get(rel, {})
+                if meta:
+                    def _meta_value(key: str) -> str:
+                        value = meta.get(key, "")
+                        return "" if pd.isna(value) else str(value)
+
+                    header_lines = [
+                        f"<DOCUMENT_ID>: {_meta_value('document_id')}",
+                        f"<CORPUS_ID>: {_meta_value('corpus_id')}",
+                        f"<RUN_ID>: {_meta_value('run_id')}",
+                    ]
+                    content = "\n".join(header_lines) + "\n" + content
                 f.write(content)
                 f.write("\n\n==========\n\n")
             except Exception:
@@ -199,6 +226,7 @@ def s4_extract_adjectives(
         nlp_batch_size=64,
         max_doc_chars=200000,
         use_online_judge=False,
+        mi_threshold=mi_threshold,
     )
 
     process_txt(

@@ -29,3 +29,6 @@ class TxtAnalysisConfig:
     max_doc_chars: int = 200000
     collocate_window_tokens: int = 5
     collocate_min_freq: int = 2
+    adj_min_freq: int = 2
+    mi_threshold: float = 3.0
+    ll_significance_level: float = 0.05

@@ -2,6 +2,35 @@
 
 本文档解释项目主要输出文件和字段的研究含义。
 
+## 统一语料模型输出
+
+第一阶段平台化改造新增了一层稳定的 corpus/document/run 数据模型。旧输出仍然保留在输出根目录，新的规范化元数据写入：
+
+| 文件 | 含义 |
+|---|---|
+| `00_run_config/data_model.json` | 统一数据模型说明，定义 corpus、document、analysis_run、review_item 等实体。 |
+| `01_corpus/corpus_manifest.json` | 当前语料库清单，记录 `corpus_id`、`run_id`、语料类型、文档数、近似词数、目标词命中数。 |
+| `01_corpus/documents.csv` | 机器友好的文档级元数据表。 |
+| `01_corpus/document_registry.xlsx` | 研究者友好的文档级元数据表，附 README sheet。 |
+
+核心字段：
+
+| 字段 | 含义 |
+|---|---|
+| `corpus_id` | 稳定语料库 ID，用于把同一语料的文档、分析和复核结果关联起来。 |
+| `run_id` | 本次 pipeline 运行 ID，用于记录一次带参数的分析执行。 |
+| `document_id` | 稳定文档 ID，是后续 KWIC、搭配、编码和复核结果的统一连接键。 |
+| `corpus_type` | 语料类型/模板，例如 `news_lexis`、`policy`、`academic`、`interview`、`social_media`。 |
+| `source_raw` | 从文本头部或导入源中解析的原始来源。 |
+| `source_normalized` | 规范化后的来源或分组标签。 |
+| `group_label` | 默认比较分组变量，可对应媒体、机构、学科、平台、说话人角色等。 |
+| `relative_path` | 文档在旧 `corpus/` 目录中的相对路径。 |
+| `word_count_approx` | 近似词数。 |
+| `target_hits_total` | 当前目标词列表的总命中数。 |
+| `target_hits_json` | 各目标词命中次数的 JSON 字段。 |
+
+研究用途：这层模型是后续综合语料平台的地基。新闻语料仍可使用旧流程，但新的多语料导入、跨语料比较、编码复核和报告导出都应优先连接到 `document_id`、`corpus_id` 和 `run_id`。
+
 ## `source_counts.xlsx`
 
 | 字段 | 含义 |
@@ -51,6 +80,10 @@
 | 字段 | 含义 |
 |---|---|
 | `Target` | 研究目标词。 |
+| `Corpus_ID` | 稳定语料库 ID，用于把分析结果连接回 `01_corpus/corpus_manifest.json`。 |
+| `Run_ID` | 稳定分析运行 ID，用于追溯本次参数化分析。 |
+| `Document_ID` | KWIC 等单条语境证据所在的稳定文档 ID。 |
+| `Document_IDs` | 聚合候选项涉及的稳定文档 ID 列表，用 ` | ` 分隔。 |
 | `Adjective` | 自动提取的候选形容词。 |
 | `Phrase` | 自动提取的候选短语或词块。 |
 | `Frequency` | 候选表达出现次数。 |

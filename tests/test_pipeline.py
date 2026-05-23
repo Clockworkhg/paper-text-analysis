@@ -2,6 +2,10 @@
 """Tests for shared/pipeline_steps.py and pipeline integration."""
 
 from pathlib import Path
+import sys
+import types
+
+import pandas as pd
 
 from shared.exceptions import (
     InputFileNotFoundError,
@@ -11,6 +15,7 @@ from shared.exceptions import (
 from shared.pipeline_steps import (
     STEPS,
     check_step_done,
+    s4_extract_adjectives,
 )
 from shared.cli_pipeline import parse_step_selection, runnable_steps
 
@@ -60,6 +65,7 @@ def test_runnable_steps_skips_existing_outputs_unless_forced(tmp_path: Path):
     assert runnable_steps([2], tmp_path, targets="China", force=False, log=lambda _: None) == []
     assert runnable_steps([2], tmp_path, targets="China", force=True, log=lambda _: None) == [2]
 
+
 def test_pipeline_error_base_class():
     exc = InputFileNotFoundError("test")
     assert isinstance(exc, PipelineError)
@@ -69,3 +75,40 @@ def test_pipeline_error_base_class():
 def test_missing_precondition_is_pipeline_error():
     exc = MissingPreconditionError("no TXT files found")
     assert isinstance(exc, PipelineError)
+
+
+def test_s4_injects_stable_ids_from_document_registry(tmp_path: Path, monkeypatch):
+    corpus = tmp_path / "corpus" / "BBC"
+    corpus.mkdir(parents=True)
+    (corpus / "story.txt").write_text(
+        "<TITLE>: Story\n<SOURCE>: BBC\n<DATE>: 2024-01-02\n\n----- BODY -----\n\nChina is stable.",
+        encoding="utf-8",
+    )
+    model_dir = tmp_path / "01_corpus"
+    model_dir.mkdir()
+    pd.DataFrame(
+        {
+            "relative_path": ["BBC/story.txt"],
+            "document_id": ["doc_123"],
+            "corpus_id": ["corpus_abc"],
+            "run_id": ["run_xyz"],
+        }
+    ).to_csv(model_dir / "documents.csv", index=False, encoding="utf-8-sig")
+
+    captured = {}
+
+    def fake_process_txt(input_path, output_path, targets, cfg, log_cb=None):
+        captured["merged"] = Path(input_path).read_text(encoding="utf-8")
+        pd.DataFrame({"ok": [1]}).to_excel(output_path, index=False)
+
+    fake_module = types.SimpleNamespace(
+        process_txt=fake_process_txt,
+        split_targets=lambda text: [part.strip() for part in text.split(";") if part.strip()],
+    )
+    monkeypatch.setitem(sys.modules, "modules.txt_modifier_extractor_gui", fake_module)
+
+    s4_extract_adjectives(str(tmp_path / "corpus"), str(tmp_path), "China")
+
+    assert "<DOCUMENT_ID>: doc_123" in captured["merged"]
+    assert "<CORPUS_ID>: corpus_abc" in captured["merged"]
+    assert "<RUN_ID>: run_xyz" in captured["merged"]

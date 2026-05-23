@@ -22,6 +22,11 @@ SCAN_PDFS = [
 ]
 
 
+def discover_pdfs(root_dir: Path) -> list[Path]:
+    """Recursively find all PDFs under a directory."""
+    return sorted(p for p in root_dir.rglob("*.pdf") if p.is_file())
+
+
 def safe_stem(path: Path) -> str:
     stem = re.sub(r"[^\w\u4e00-\u9fff.-]+", "_", path.stem, flags=re.UNICODE)
     return stem.strip("._")[:120] or "ocr_output"
@@ -63,13 +68,28 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="OCR scanned literature PDFs into UTF-8 text files.")
     parser.add_argument("--out", default=str(ROOT / "文献" / "OCR文本"), help="Output directory")
     parser.add_argument("--scale", type=float, default=2.0, help="PDF render scale; 2.0 is about 144 DPI")
+    parser.add_argument("--all", action="store_true", help="Scan ALL PDFs under 文献/ (not just hardcoded 3)")
+    parser.add_argument("--pdf", default="", help="OCR a specific PDF file")
     args = parser.parse_args()
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    if args.pdf:
+        pdf_path = Path(args.pdf)
+        if not pdf_path.exists():
+            print(f"PDF not found: {pdf_path}", flush=True)
+            raise SystemExit(1)
+        to_scan = [pdf_path]
+    elif args.all:
+        lit_dir = ROOT / "文献"
+        to_scan = discover_pdfs(lit_dir)
+        print(f"Found {len(to_scan)} PDFs under {lit_dir}", flush=True)
+    else:
+        to_scan = SCAN_PDFS
+
     records = []
-    for pdf_path in SCAN_PDFS:
+    for pdf_path in to_scan:
         if not pdf_path.exists():
             print(f"missing: {pdf_path}", flush=True)
             continue
