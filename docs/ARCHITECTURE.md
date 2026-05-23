@@ -14,6 +14,8 @@ runtime is organized around a small number of stable layers.
 - `pipeline.py` is a legacy command-line pipeline kept for compatibility. It
   parses the older flags and delegates execution to the same shared runner as
   `research_tool.py run`.
+- `build_exe.py` is the maintained PyInstaller packaging entry point for
+  standalone executables. Generated `.spec` files are local build artifacts.
 
 ## GUI Support
 

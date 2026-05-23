@@ -40,6 +40,9 @@ dependencies = [
 dev = [
     "pytest>=7.0",
 ]
+build = [
+    "pyinstaller>=6.0",
+]
 ocr = [
     "RapidOCR>=1.3",
     "pypdfium2>=4.0",

@@ -48,12 +48,34 @@ Run tests:
 python research_tool.py test
 ```
 
+Install editable CLI entry points for development:
+
+```powershell
+python -m pip install -e ".[dev]"
+cads --help
+cads-gui
+```
+
 ## Main Entry Points
 
 - `research_tool.py`: primary CLI for daily use.
 - `integrated_app.py`: Tkinter desktop application.
 - `pipeline.py`: legacy full-pipeline CLI.
 - `tools/ocr_scanned_pdfs.py`: OCR helper for scanned PDFs.
+
+## Packaging
+
+Development runs use `python research_tool.py ...` or the editable `cads`
+entry point. Standalone Windows executables are built with PyInstaller:
+
+```powershell
+python -m pip install -e ".[build]"
+python build_exe.py --dry-run
+python build_exe.py --cli
+python build_exe.py --gui
+```
+
+See [Packaging](docs/PACKAGING.md) for the release checklist and debug options.
 
 ## Main Outputs
 
@@ -95,6 +117,7 @@ The main analysis workbook, `adjectives_phrases.xlsx`, includes:
 - [Research Templates](docs/RESEARCH_TEMPLATES.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Maintenance](docs/MAINTENANCE.md)
+- [Packaging](docs/PACKAGING.md)
 
 ## Repository Hygiene
 

@@ -12,11 +12,19 @@ recursive-include tools *.py *.json
 
 exclude .gitignore
 exclude .gitattributes
+exclude *.spec
 
-prune 文献
+prune literature_md
+prune literature_raw
+prune ocr_output
 prune output
 prune outputs
+prune projects
+prune runtime
+prune workspace
 prune dist
 prune build
 prune .cache
 prune .ocr_deps
+prune .pytest_cache
+prune .venv
