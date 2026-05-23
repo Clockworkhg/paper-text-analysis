@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 from modules.gui.support import COLORS, set_window_icon
-from modules.gui.project_workbench import TabProjectWorkbench
+from modules.gui.project_workbench import TOOL_DEFINITIONS, TabProjectWorkbench
 from modules.gui.pipeline_tabs import TabAdjectives, TabMerge, TabPipeline, TabPOSTranslate
 from modules.gui.result_browser import TabResultBrowser
 from modules.gui.tool_tabs import TabColumnMerge, TabJSONtoExcel, TabKWIC
