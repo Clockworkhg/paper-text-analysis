@@ -11,7 +11,9 @@ runtime is organized around a small number of stable layers.
   tests.
 - `integrated_app.py` is the Tkinter desktop application. It delegates most
   project-level work to `shared.project_workflow`.
-- `pipeline.py` is a legacy command-line pipeline kept for compatibility.
+- `pipeline.py` is a legacy command-line pipeline kept for compatibility. It
+  parses the older flags and delegates execution to the same shared runner as
+  `research_tool.py run`.
 
 ## GUI Support
 
@@ -42,6 +44,8 @@ runtime is organized around a small number of stable layers.
   The normalized document registry lives under `01_corpus/`.
 - `shared/pipeline_steps.py` wraps the older LexisNexis, source normalization,
   text analysis, and POS/translation steps.
+- `shared/cli_pipeline.py` owns command-line step selection, skip/force
+  handling, run-config updates, and the shared 1-5 pipeline execution flow.
 - `shared/validation.py` creates human-review templates, validation reports,
   and dual-coder reliability summaries.
 - `shared/research_templates.py` stores corpus-type templates for news, policy,

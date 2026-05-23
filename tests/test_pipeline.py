@@ -12,6 +12,7 @@ from shared.pipeline_steps import (
     STEPS,
     check_step_done,
 )
+from shared.cli_pipeline import parse_step_selection, runnable_steps
 
 
 def test_steps_dict_contains_all_five():
@@ -38,6 +39,26 @@ def test_check_step_done_detects_existing_output():
 def test_check_step_done_invalid_step():
     assert check_step_done(99, ".") is False
 
+
+def test_parse_step_selection_supports_skip_and_only():
+    assert parse_step_selection(skip="2,4") == [1, 3, 5]
+    assert parse_step_selection(only="2,4,99") == [2, 4]
+
+
+def test_runnable_steps_skips_target_dependent_steps_without_targets(tmp_path: Path):
+    messages = []
+
+    steps = runnable_steps([1, 4, 5], tmp_path, targets="", force=True, log=messages.append)
+
+    assert steps == [1]
+    assert any("no target terms" in message for message in messages)
+
+
+def test_runnable_steps_skips_existing_outputs_unless_forced(tmp_path: Path):
+    (tmp_path / "source_counts.xlsx").touch()
+
+    assert runnable_steps([2], tmp_path, targets="China", force=False, log=lambda _: None) == []
+    assert runnable_steps([2], tmp_path, targets="China", force=True, log=lambda _: None) == [2]
 
 def test_pipeline_error_base_class():
     exc = InputFileNotFoundError("test")
