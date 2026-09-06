@@ -316,8 +316,15 @@ class ProjectStore:
 
         if source_progress and source_progress.get("total"):
             decided, total = source_progress["decided"], source_progress["total"]
-            src_state = f"{decided}/{total}"
-            src_detail = "全部来源已复核" if decided >= total else f"待复核 {total - decided} 个来源"
+            status = source_progress.get("status", "")
+            if status == "STALE":
+                src_state = "STALE"
+                src_detail = (f"旧复核结果 {source_progress.get('stale_count', 0)} 条已保留未计入"
+                              "(需要 reconciliation/migration);当前已复核 "
+                              f"{decided}/{total}")
+            else:
+                src_state = f"{decided}/{total}"
+                src_detail = "全部来源已复核" if decided >= total else f"待复核 {total - decided} 个来源"
         else:
             src_state, src_detail = "–", "无来源清单或未开始"
 
@@ -331,11 +338,20 @@ class ProjectStore:
 
         if semantic_progress and semantic_progress.get("total"):
             coded, total = semantic_progress["coded"], semantic_progress["total"]
-            sem_state = f"{coded}/{total}"
-            sem_detail = "全部候选已编码" if coded >= total else f"待编码 {total - coded} 条候选"
+            status = semantic_progress.get("status", "")
+            if status == "STALE":
+                sem_state = "STALE"
+                sem_detail = (f"旧人工编码 {semantic_progress.get('stale_count', 0)} 条已保留未计入"
+                              "(需要 reconciliation/migration);当前已编码 "
+                              f"{coded}/{total}")
+            else:
+                sem_state = f"{coded}/{total}"
+                sem_detail = "全部候选已编码" if coded >= total else f"待编码 {total - coded} 条候选"
         else:
             sem_state, sem_detail = "–", "无候选清单或未开始"
 
+        # Coder reconciliation: a *file fact* (FINAL/coder workbooks), never
+        # inferred from reliability data.
         review_files = self.review_files()
         coder_files = [item for item in review_files if "coder" in item["name"]]
         final_file = next((item for item in review_files if "FINAL" in item["name"]), None)
@@ -347,17 +363,19 @@ class ProjectStore:
         else:
             recon_state, recon_detail = "–", "无双编码文件"
 
+        # Reliability: only actual IRR facts (metric/value/n). No value means
+        # "尚无数据" — never auto-interpreted as reconciled or passed.
         reliability_rows = self.reliability_summary()
         judgment = next((row for row in reliability_rows
                          if row["field"] in ("is_correct", "error_type") and row["value"]), None)
         if judgment:
-            irr_state = WARN
-            irr_detail = (f"{judgment['metric']} = {judgment['value']} ({judgment['field']}, "
-                          f"n={judgment['pairs']}, {judgment['interpretation']}) — 统计值,非方法学通过")
+            irr_state = f"{judgment['metric']} {judgment['value']}"
+            irr_detail = (f"{judgment['field']} · n={judgment['pairs']} · "
+                          f"{judgment['interpretation']}(统计值,非方法学通过)")
         elif reliability_rows:
-            irr_state, irr_detail = "–", "判定字段信度尚无数据(编码文件未调和)"
+            irr_state, irr_detail = "–", "判定字段信度:尚无数据"
         else:
-            irr_state, irr_detail = "–", "未生成信度报告"
+            irr_state, irr_detail = "–", "信度报告尚未生成"
 
         frozen = self.frozen_runs()
         final_run = (OK, frozen[-1].get("label") or frozen[-1].get("run_id", ""), OK_ROLE) if frozen else (PENDING, "未固化", MUTED_ROLE)

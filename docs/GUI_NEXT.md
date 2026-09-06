@@ -46,6 +46,59 @@ Success `#267A57` / Warning `#A86916` / Error `#B33A3A`;Segoe UI +
 Microsoft YaHei UI,正文 13px;间距只用 4/8/12/16/24/32;圆角 6px。
 全部令牌集中在 `gui_next/theme.py`。
 
+## Phase 2A.1:Review State Integrity
+
+人工 review state 的完整性保证:候选集/语料/分析变化后,旧决定绝不静默套用到新的研究对象上。
+
+### State 溯源元数据(schema v2)
+
+state 文件(`06_review/*_review_state.json`)记录:`schema_version`、project_id/name、
+run_id、`corpus_fingerprint`、`input_fingerprint`(语义韵=候选集内容指纹,来源=来源表
+内容指纹)+ `input_provenance`(输入文件名与其 sha256)、`created_at`/`updated_at`。
+每条决定额外记录 `item_fingerprint`(语义韵=review_id+corpus+文档+target+候选内容;
+来源=来源名+原始名+建议国别)。
+
+### 加载语义
+
+| 情形 | 行为 |
+|---|---|
+| item id 一致且指纹一致 | 恢复决定 |
+| id 一致但内容指纹不一致 | 该决定标记 stale,不应用 |
+| 候选集内容指纹整体变化 | 未匹配项全部不应用 |
+| corpus 指纹变化 | 整个 state STALE |
+| 旧版 state(schema<2) | STALE,需迁移,绝不按顺序 ID 恢复 |
+
+旧决定永远保留在 state 文件中(不计入当前进度、不覆盖当前候选),界面提示需要
+reconciliation/migration(自动迁移本阶段未实现)。内容一致的候选集良性重生成
+不会导致失效。
+
+### Review 状态词汇(全 GUI 统一)
+
+`NOT_STARTED / IN_PROGRESS / COMPLETE / STALE`,用于语义韵复核、来源复核
+(Overview 状态行、工作台横幅、来源面板进度条)。
+
+### Reconciliation 与 Reliability 解耦
+
+编码者调和只反映文件事实(FINAL/编码文件存在与否);信度只展示 IRR 表中的实际
+Metric/Value/n,无值时只写"尚无数据/报告尚未生成",二者互不推断。
+
+### 单写者保护(轻量,乐观并发)
+
+save 前比对 state 文件当前哈希与本实例记住的哈希;不一致(另一实例已写入)则拒绝
+覆盖并抛出明确错误,原文件完整;`reload()` 拉取对方更改后可继续。
+
+### Undo
+
+Ctrl+Z 撤销最近一次编码/备注修改(恢复 decision、note、cursor、progress 一致);
+操作历史持久化于 state 文件(上限 50 条),跨会话可撤销。
+
+### 测试
+
+`tests/test_gui_next_state_integrity.py`:溯源元数据、同 id 不同内容不恢复、
+corpus 变化 → STALE、良性重生成不失效、旧版 state 迁移、四态词汇、stale 不计入
+进度、调和/信度解耦、双实例冲突拒绝且原文件完整、Ctrl+Z 一致性、全部复核操作
+期间语料/分析/复核工作簿字节不变。
+
 ## 阶段规划
 
 | 阶段 | 内容 | 状态 |

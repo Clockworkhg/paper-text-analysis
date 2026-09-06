@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.4.2-unreleased - gui-next Phase 2A.1: Review State Integrity
+
+### Added
+
+- Review state provenance (schema v2): state files now record schema_version,
+  project identity, run_id, corpus fingerprint, candidate/source input
+  fingerprint, input file provenance, and created/updated timestamps.
+- Per-decision `item_fingerprint`: decisions restore only when the underlying
+  research object is content-identical; id-collisions with changed content
+  are marked stale and never silently applied. Legacy (schema<2) states are
+  stale-by-definition and require explicit migration.
+- Unified review status vocabulary NOT_STARTED / IN_PROGRESS / COMPLETE /
+  STALE across Overview, the semantic workbench, and the source panel; stale
+  decisions stay preserved on disk, are excluded from progress, and surface
+  a reconciliation/migration banner.
+- Lightweight single-writer protection: saves compare the on-disk state hash
+  against the loading instance's remembered hash and refuse (with a clear
+  error, file intact) when another instance wrote in between; `reload()`
+  picks up external changes.
+- Ctrl+Z undo for the semantic workbench (decision/note/cursor/progress
+  restored consistently), with the last 50 operations persisted in the state
+  file.
+- Coder reconciliation and reliability rows fully decoupled: reconciliation
+  reports file facts only; reliability reports only actual IRR
+  metric/value/n and says "no data" otherwise, without inferring each other.
+
 ## 0.4.1-unreleased - gui-next Phase 2A: Human Review Workbench
 
 ### Added

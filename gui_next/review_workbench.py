@@ -116,6 +116,13 @@ class SemanticReviewWorkbench(QWidget):
         self._progress_bar.setFixedWidth(220)
         self._progress_bar.setFormat("已编码 %p%")
 
+        self._stale_banner = QLabel("")
+        self._stale_banner.setWordWrap(True)
+        self._stale_banner.setStyleSheet(
+            f"color: {theme.WARNING}; background: transparent; font-weight: 600;"
+        )
+        self._stale_banner.hide()
+
         self._target_label = QLabel("–")
         self._candidate_label = QLabel("–")
         self._candidate_label.setStyleSheet(f"color: {theme.PRIMARY}; font-weight: 600; background: transparent;")
@@ -134,6 +141,7 @@ class SemanticReviewWorkbench(QWidget):
         _cell(0, 2, "CANDIDATE", self._candidate_label)
         _cell(0, 3, "SOURCE / DOCUMENT", self._source_label)
         header_layout.setColumnStretch(3, 1)
+        header_layout.addWidget(self._stale_banner, 2, 0, 1, 4)
         root.addWidget(header)
 
         # --- Center: extended context ---------------------------------
@@ -184,7 +192,8 @@ class SemanticReviewWorkbench(QWidget):
 
         hint = QLabel(
             "快捷键:1/2/3/4 = Positive/Negative/Neutral/Mixed · X = Exclude · U = Uncertain · "
-            "Enter = 保存并下一条 · Shift+Enter = 上一条 · O = 打开全文 · F2 = 备注(备注框内数字照常输入)"
+            "Enter = 保存并下一条 · Shift+Enter = 上一条 · O = 打开全文 · F2 = 备注 · "
+            "Ctrl+Z = 撤销上一次编码(备注框内字母数字照常输入)"
         )
         hint.setStyleSheet(f"color: {theme.MUTED}; background: transparent;")
         root.addWidget(hint)
@@ -200,6 +209,10 @@ class SemanticReviewWorkbench(QWidget):
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         key, mods = event.key(), event.modifiers()
+        if mods & Qt.ControlModifier and key == Qt.Key_Z:
+            self.undo_last()
+            event.accept()
+            return
         if mods & Qt.ShiftModifier and key in (Qt.Key_Return, Qt.Key_Enter):
             self.previous()
             event.accept()
@@ -255,8 +268,17 @@ class SemanticReviewWorkbench(QWidget):
     def refresh(self) -> None:
         progress = self.review.progress()
         self._progress_label.setText(f"{progress['coded']} / {progress['total']}")
-        self._progress_bar.setMaximum(max(progress["total"], 1))
+        self._progress_bar.setMaximum(max(progress['total'], 1))
         self._progress_bar.setValue(progress["coded"])
+
+        if self.review.status() == "STALE":
+            self._stale_banner.setText(
+                f"⚠ 复核状态 STALE({self.review.stale_summary()})——"
+                "旧人工结果已保留但未计入当前进度,需要 reconciliation/migration;新编码正常写入。"
+            )
+            self._stale_banner.show()
+        else:
+            self._stale_banner.hide()
 
         item = self.review.current_item()
         if item is None:
@@ -318,6 +340,14 @@ class SemanticReviewWorkbench(QWidget):
     def previous(self) -> None:
         self.review.set_cursor(self.review.cursor - 1)
         self.review.save()
+        self.refresh()
+
+    def undo_last(self) -> None:
+        """Ctrl+Z: undo the most recent decision/note change (session + persisted)."""
+        item_id = self.review.undo()
+        if item_id is None:
+            self.inspector.show_empty("没有可撤销的操作。")
+            return
         self.refresh()
 
     def _open_document(self) -> None:

@@ -140,9 +140,10 @@ class SourceReviewPanel(QWidget):
 
     def refresh(self) -> None:
         progress = self.review.progress()
-        self._progress.setText(
-            f"总数 {progress['total']} · 已复核 {progress['decided']} · 待复核 {progress['pending']}"
-        )
+        text = f"总数 {progress['total']} · 已复核 {progress['decided']} · 待复核 {progress['pending']}"
+        if progress.get("status") == "STALE":
+            text += f" · ⚠ STALE({self.review.stale_summary()})——旧结果已保留未计入,需 reconciliation/migration"
+        self._progress.setText(text)
         items = self.review.items
         if not items:
             self._heading.setText("无来源数据")

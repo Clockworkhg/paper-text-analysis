@@ -179,7 +179,8 @@ def test_semantic_review_progress_and_persistence(project_dir: Path):
 
     reloaded = SemanticReviewStore(project_dir)
     progress = reloaded.progress()
-    assert progress == {"total": 2, "coded": 1, "pending": 1}
+    assert progress["coded"] == 1 and progress["total"] == 2 and progress["pending"] == 1
+    assert progress["status"] == "IN_PROGRESS"
     assert reloaded.decisions["semantic_0001"]["note"] == "threat framing"
 
 
