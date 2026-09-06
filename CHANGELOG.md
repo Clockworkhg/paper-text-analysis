@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.4.1-unreleased - gui-next Phase 2A: Human Review Workbench
+
+### Added
+
+- Source/Country review workbench (Corpus → Sources): per-source evidence
+  panel (original/normalized/suggested country/confidence/evidence) with
+  Accept / Change / Uncertain / Exclude, keyboard shortcuts, Save & Next,
+  and decided/pending counts. Decisions persist to
+  `06_review/source_country_review_state.json` with embedded evidence refs.
+- Semantic Review Workbench (复核 page): single-candidate keyboard coding
+  (1/2/3/4 = Positive/Negative/Neutral/Mixed, X Exclude, U Uncertain,
+  Enter = Save & Next, Shift+Enter previous, O open document) over the
+  review workbook's stable `review_id`s, with highlighted KWIC context,
+  independent per-item notes, and persisted cursor. Decisions persist to
+  `06_review/semantic_review_state.json`.
+- Review write boundary `gui_next/data/review_store.py`: the only component
+  allowed to write; atomic JSON writes (tmp + os.replace), no partial files
+  on failure, corpus and analysis outputs never touched.
+- Split Overview status semantics: source normalization review, country
+  review, semantic review, coder reconciliation, and inter-rater reliability
+  each report their own state; reliability shows the actual statistic and
+  value (or an explicit "no data"), never a bare pass.
+- Corpus health state machine (UNKNOWN / PASS / WARNING / BLOCKED / STALE)
+  shared across Overview, Corpus → Health, and the status bar; STALE is
+  derived from corpus fingerprint mismatch (mtime/count fallback for legacy
+  reports).
+
 ## 0.4.0-unreleased - gui-next research workbench (Phase 1)
 
 ### Added

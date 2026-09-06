@@ -50,10 +50,73 @@ Microsoft YaHei UI,正文 13px;间距只用 4/8/12/16/24/32;圆角 6px。
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| Phase 1 | Overview / Corpus / Analysis(KWIC)/ Review 只读 + Inspector + Runs | ✅ 本分支 |
-| Phase 2 | 分析运行接入、Source/Country Review(证据面板 + 接受/修改)、语义韵键盘编码(1/2/3/4 + Enter) | 待做 |
+| Phase 1 | Overview / Corpus / Analysis(KWIC)/ Review 只读 + Inspector + Runs | ✅ |
+| Phase 2A | **Human Review Workbench**:Source/Country 复核(证据面板 + Accept/Change/Uncertain/Exclude)、语义韵键盘编码工作台、Overview 状态拆分、语料健康状态机、写边界 `review_store.py` | ✅ |
+| Phase 2B | 分析运行接入、Evidence 面板细化(Wikidata/域名/规则分级) | 待做 |
 | Phase 3 | Evidence Trail(证据篮 → Claim→Pattern→KWIC→Document→Run 导出)、Run Compare、Report | 待做 |
 | 收尾 | 旧 Tkinter GUI 移除(CLI 永久保留) | 待做 |
 
-测试:`tests/test_gui_next.py`(无头 offscreen);数据层一律只读,
-复用 `shared/` 的文件布局约定但不调用任何会写文件的接口。
+## Phase 2A:Human Review Workbench
+
+两条人工复核写入链路,全部经 `gui_next/data/review_store.py`(唯一写边界,
+原子写入 tmp+os.replace,失败不产生半写文件,不触碰语料与分析产物):
+
+### 1. Source/Country 复核(语料 → Sources)
+
+- 来源清单:`merged_sources.xlsx` 优先;未运行机构合并时回退登记表来源清单;
+- 右侧复核面板:original / normalized / suggested country / confidence / evidence 拆分展示,
+  常驻"ⓘ 国别为自动推断的辅助变量,使用前必须人工复核";
+- 操作:Accept (A) / Change (C,填写国别) / Uncertain (U) / Exclude (X);
+  Enter = Save & Next(修改过国别即记为 Change,否则 Accept);Shift+Enter 上一条;
+  F2 国别框、F3 备注;
+- 顶部显示 总数 / 已复核 / 待复核;决定写入 `06_review/source_country_review_state.json`,
+  每条决定内嵌 EvidenceRef(item_type/item_id/document_id/run_id,为 Phase 3 预留)。
+
+### 2. 语义韵复核工作台(复核页)
+
+单条候选为中心的键盘编码界面:顶部进度 + target/candidate/document;中央大面积
+KWIC/扩展语境(候选词与目标词高亮,来自工作簿 KWIC 上下文重建);编码区 +
+研究备注。固定快捷键(备注框内字母数字照常输入,F2/Esc 进出):
+
+```
+1 Positive   2 Negative   3 Neutral   4 Mixed
+X Exclude    U Uncertain
+Enter        保存并下一条(立即生效,无确认框)
+Shift+Enter  上一条
+O            打开全文文档
+```
+
+候选清单来自 `06_review/modifier_semantic_review*.xlsx` 的 SemanticProsodyReview
+(沿用其稳定 `review_id`),决定与备注写入 `06_review/semantic_review_state.json`;
+重启后进度与光标原位恢复。
+
+### 3. Overview 状态语义(拆分)
+
+复核不再是一个笼统百分比,拆为:语料导入 / 语料卫生(五态)/ 来源规范化复核(x/y)/
+国别复核(待复核 n 条建议;无建议时明确显示"国别推断未运行")/ 分析 / 语义韵复核
+(x/y)/ 编码者调和(FINAL 与编码文件)/ 编码者信度(**显示统计量与值**,如
+"Cohen's κ = 0.83 (is_correct, n=50)",无数据时明示"尚无数据",绝不把统计值表述为
+方法学通过)/ 最终运行固化。
+
+### 4. 语料健康状态机(全 GUI 统一)
+
+```
+UNKNOWN  无语料,或卫生检查未运行
+PASS     检查通过、无警告、语料未变化
+WARNING  检查通过但有数据质量警告
+BLOCKED  存在元数据标记污染(分析门禁阻止)
+STALE    检查结果已过期:语料指纹与报告不一致(旧报告回退为
+         mtime/文档数比对),不得沿用旧 PASS/WARNING
+```
+
+状态显示于概览状态行、顶部横幅(BLOCKED/STALE 有专属横幅)与底部状态栏。
+
+### 测试与写入安全
+
+- `tests/test_gui_next_review.py`:两类决定的持久化与重启恢复、快捷键映射
+  (QTest 真实按键)、Enter 精确前进一条、五态健康机、进度计算、原子写失败
+  不产生半写文件;
+- **写入安全保证**:所有复核操作前后,`corpus/`、`adjectives_phrases.xlsx`、
+  复核工作簿原件、run_config/project.json 的字节哈希完全不变(测试与真实项目
+  副本 E2E 均已验证);
+- 分析内核 `shared/` 在 Phase 2A **零改动**。

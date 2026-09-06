@@ -27,10 +27,20 @@ from PySide6.QtWidgets import (
 )
 
 from gui_next import theme
+from gui_next.data.health import HealthState
+from gui_next.data.review_store import SemanticReviewStore, SourceCountryReviewStore
 from gui_next.data.store import ProjectStore
 from gui_next.models import DataFrameModel
+from gui_next.source_review_panel import SourceReviewPanel
 
 STATE_COLORS = {"ok": theme.SUCCESS, "warn": theme.WARNING, "muted": theme.MUTED, "error": theme.ERROR}
+HEALTH_COLORS = {
+    HealthState.PASS: theme.SUCCESS,
+    HealthState.WARNING: theme.WARNING,
+    HealthState.STALE: theme.WARNING,
+    HealthState.BLOCKED: theme.ERROR,
+    HealthState.UNKNOWN: theme.MUTED,
+}
 
 
 def _table(df: pd.DataFrame, *, max_height: int = 0) -> QTableView:
@@ -75,12 +85,16 @@ def _muted(text: str) -> QLabel:
 class OverviewPage(QWidget):
     """The research home page: what is this study, where is it, what's wrong."""
 
-    def __init__(self, store: ProjectStore, inspector, navigate, parent=None):
+    def __init__(self, store: ProjectStore, inspector, navigate, *,
+                 health=None, source_store=None, semantic_store=None, parent=None):
         super().__init__(parent)
         self.setObjectName("Page")
         self.store = store
         self.inspector = inspector
         self.navigate = navigate  # callable(page_key) for cross-page jumps
+        self.health = health  # (HealthState, detail) tuple
+        self.source_store = source_store
+        self.semantic_store = semantic_store
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 24, 24, 24)
@@ -118,13 +132,20 @@ class OverviewPage(QWidget):
         self._build_callout()
 
         status_card, status_layout = _card("研究流程")
-        for row in store.pipeline_status():
+        country_pending, country_total = self._country_pending()
+        for row in store.pipeline_status(
+            health=self.health,
+            source_progress=self.source_store.progress() if self.source_store else None,
+            country_pending=country_pending,
+            country_total=country_total,
+            semantic_progress=self.semantic_store.progress() if self.semantic_store else None,
+        ):
             line = QHBoxLayout()
             line.setSpacing(12)
             stage = QLabel(row["stage"])
-            stage.setFixedWidth(110)
+            stage.setFixedWidth(130)
             state = QLabel(str(row["state"]))
-            state.setFixedWidth(24)
+            state.setFixedWidth(80)
             detail = QLabel(str(row["detail"]))
             detail.setObjectName("Muted")
             detail.setStyleSheet(f"color: {theme.MUTED}; background: transparent;")
@@ -135,25 +156,48 @@ class OverviewPage(QWidget):
         status_layout.addStretch(1)
         root.addWidget(status_card, 1)
 
+    def _country_pending(self) -> tuple[int, int]:
+        """(pending, total) country suggestions without a decision."""
+        if self.source_store is None:
+            return 0, 0
+        pending = total = 0
+        for item in self.source_store.items:
+            if not str(item.get("suggested_country") or "").strip():
+                continue
+            total += 1
+            if item["source"] not in self.source_store.decisions:
+                pending += 1
+        return pending, total
+
     def _build_callout(self) -> None:
         while self._callout_layout.count():
             item = self._callout_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
-        blocked = self.store.analysis_blocked_reason()
-        if blocked:
+        state = self.health[0] if self.health else HealthState.UNKNOWN
+        detail = self.health[1] if self.health else ""
+        if state is HealthState.BLOCKED:
             self._callout.setObjectName("CalloutBlocked")
-            heading = QLabel("Analysis blocked")
-            heading.setObjectName("CalloutTitle")
+            heading = QLabel("Analysis blocked — corpus sanitation failed")
             heading.setStyleSheet(f"color: {theme.ERROR}; background: transparent; font-weight: 600;")
-            body = QLabel(blocked)
+            body = QLabel(detail)
             body.setWordWrap(True)
             body.setStyleSheet("background: transparent;")
-            action = QLabel("→ 前往 Corpus → Health 查看详情;用原始语料重新导入后重跑分析。")
+            action = QLabel("→ 前往 语料 → Health 查看详情;用原始 DOCX/干净正文重新导入后重跑分析。")
             action.setStyleSheet("background: transparent;")
             for widget in (heading, body, action):
                 self._callout_layout.addWidget(widget)
+            self._callout.setVisible(True)
+        elif state is HealthState.STALE:
+            self._callout.setObjectName("Callout")
+            heading = QLabel("Corpus health: STALE — 卫生检查结果已过期")
+            heading.setStyleSheet(f"color: {theme.WARNING}; background: transparent; font-weight: 600;")
+            body = QLabel(f"{detail}。请重新运行 project sanity,再继续分析或复核。")
+            body.setWordWrap(True)
+            body.setStyleSheet("background: transparent;")
+            self._callout_layout.addWidget(heading)
+            self._callout_layout.addWidget(body)
             self._callout.setVisible(True)
         elif not self.store.has_analysis():
             self._callout.setObjectName("Callout")
@@ -177,11 +221,14 @@ class OverviewPage(QWidget):
 class CorpusPage(QWidget):
     """Documents / Sources / Health — what the data is and whether it is clean."""
 
-    def __init__(self, store: ProjectStore, inspector, parent=None):
+    def __init__(self, store: ProjectStore, inspector, *, source_store=None,
+                 health=None, parent=None):
         super().__init__(parent)
         self.setObjectName("Page")
         self.store = store
         self.inspector = inspector
+        self.source_store = source_store
+        self.health = health
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 24, 24, 24)
@@ -211,13 +258,49 @@ class CorpusPage(QWidget):
         self.tabs.addTab(self._wrap(view, "点击行查看文档详情"), "Documents")
 
     def _build_sources(self) -> None:
-        sources = self.store.sources_df
-        columns = [col for col in ("Source_Merged", "Count_Sum", "Country", "Confidence") if col in sources.columns]
-        view = _table(sources[columns] if columns else sources)
-        view.doubleClicked.connect(
-            lambda index: self.inspector.show_source(view.model().row(index))
-        )
-        self.tabs.addTab(self._wrap(view, "来源合并与国别(辅助变量,需人工复核);双击查看证据"), "Sources")
+        sources = self._source_rows()
+        view = _table(sources)
+        header = view.horizontalHeader()
+        for column, name in enumerate(sources.columns):
+            if name in ("original", "evidence"):
+                header.setSectionHidden(column, True)
+
+        self.source_panel = SourceReviewPanel(self.source_store, self.inspector) \
+            if self.source_store is not None else None
+
+        from PySide6.QtWidgets import QSplitter
+        from PySide6.QtCore import Qt as QtConst
+        splitter = QSplitter(QtConst.Horizontal)
+        splitter.addWidget(self._wrap(view, "来源清单;选中行在右侧复核(不修改原始语料)"))
+        if self.source_panel is not None:
+            splitter.addWidget(self.source_panel)
+            splitter.setSizes([560, 380])
+            view.clicked.connect(self._on_source_selected)
+            self.source_panel.refresh()
+        self.tabs.addTab(splitter, "Sources")
+
+    def _source_rows(self) -> pd.DataFrame:
+        """Source list: merged_sources.xlsx when present, registry fallback."""
+        if self.source_store is not None and self.source_store.items:
+            rows = []
+            for item in self.source_store.items:
+                decision = self.source_store.decisions.get(item["source"], {})
+                rows.append({
+                    "source": item["source"],
+                    "original": item.get("original", ""),
+                    "documents": item.get("documents", ""),
+                    "country": item.get("country", ""),
+                    "suggested": item.get("suggested_country", ""),
+                    "confidence": item.get("confidence"),
+                    "decision": decision.get("decision", ""),
+                    "evidence": " | ".join(item.get("evidence", [])),
+                })
+            return pd.DataFrame(rows)
+        return self.store.sources_df
+
+    def _on_source_selected(self, index) -> None:
+        if self.source_panel is not None:
+            self.source_panel.set_index(index.row())
 
     def _build_health(self) -> None:
         frame = QFrame()
@@ -226,16 +309,14 @@ class CorpusPage(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
         report = self.store.sanity_report
-        if not report:
-            layout.addWidget(QLabel("尚未运行语料卫生检查"))
-            layout.addWidget(_muted("运行:python research_tool.py project sanity -p <项目目录>"))
-        else:
-            ok = report.get("ok")
-            heading = QLabel("✓ 卫生检查通过" if ok else "⚠ 卫生检查未通过")
-            heading.setStyleSheet(
-                f"color: {theme.SUCCESS if ok else theme.ERROR}; font-weight: 600; background: transparent;"
-            )
-            layout.addWidget(heading)
+        state = self.health[0] if self.health else HealthState.UNKNOWN
+        detail = self.health[1] if self.health else "未评估"
+        heading = QLabel(f"Corpus health: {state.value}")
+        heading.setStyleSheet(f"color: {HEALTH_COLORS.get(state, theme.MUTED)}; font-weight: 600; font-size: 15px;")
+        layout.addWidget(heading)
+        layout.addWidget(QLabel(detail))
+
+        if report:
             for kind, rows in (("失败", report.get("failures", {})), ("警告", report.get("warnings", {}))):
                 for name, info in rows.items():
                     count = info.get("count", info.get("groups", info.get("total", 0)))
@@ -246,7 +327,13 @@ class CorpusPage(QWidget):
                     if examples:
                         text += f" — 例: {examples}"
                     layout.addWidget(QLabel(text))
-            layout.addStretch(1)
+            checked = QLabel(f"检查时间:{report.get('checked_at', '–')}")
+            checked.setObjectName("Muted")
+            checked.setStyleSheet(f"color: {theme.MUTED}; background: transparent;")
+            layout.addWidget(checked)
+        else:
+            layout.addWidget(_muted("运行:python research_tool.py project sanity -p <项目目录>"))
+        layout.addStretch(1)
         self.tabs.addTab(frame, "Health")
 
     @staticmethod
@@ -401,68 +488,6 @@ class AnalysisPage(QWidget):
         """Cross-jump: collocate → all its KWIC lines (Sinclair: jump to context)."""
         self.tabs.setCurrentIndex(0)
         self._kwic_search.setText(collocate)
-
-
-# ======================================================================
-# Review (read-only in Phase 1)
-# ======================================================================
-
-class ReviewPage(QWidget):
-    """Review workbench (Phase 1 read-only): progress and candidate listing."""
-
-    def __init__(self, store: ProjectStore, inspector, parent=None):
-        super().__init__(parent)
-        self.setObjectName("Page")
-        self.store = store
-        self.inspector = inspector
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(24, 24, 24, 24)
-        root.setSpacing(12)
-        title = QLabel("复核")
-        title.setObjectName("PageTitle")
-        root.addWidget(title)
-
-        files = store.review_files()
-        if files:
-            best = files[0]
-            progress_card, progress_layout = _card(f"{best['name']} · {best.get('sheet', '')}")
-            bar = QProgressBar()
-            bar.setValue(int(best["percent"]))
-            bar.setFormat(f"{best['coded']} / {best['rows']} 条已编码({best['percent']}%)")
-            progress_layout.addWidget(bar)
-            others = "、".join(item["name"] for item in files[1:]) or "无"
-            progress_layout.addWidget(_muted(f"编码文件:{others}"))
-            root.addWidget(progress_card)
-
-            table_card, table_layout = _card(f"候选条目 · {best['sheet']}")
-            df = pd.read_excel(best["path"], sheet_name=best.get("sheet") or 0)
-            view = _table(df)
-            view.doubleClicked.connect(
-                lambda index: self._show_candidate(view.model().row(index))
-            )
-            table_layout.addWidget(view, 1)
-            root.addWidget(table_card, 1)
-
-            note = QLabel("ⓘ Phase 1 为只读视图;键盘编码(1/2/3/4 + Enter)在 Phase 2 接入。")
-            note.setStyleSheet(f"color: {theme.MUTED}; background: transparent;")
-            root.addWidget(note)
-        else:
-            empty, empty_layout = _card("无复核文件")
-            empty_layout.addWidget(_muted("运行 project review 生成复核模板后,这里显示编码进度与候选条目。"))
-            root.addWidget(empty)
-            root.addStretch(1)
-
-    def _show_candidate(self, row: Dict[str, Any]) -> None:
-        context = next(
-            (str(row[key]) for key in ("Full_Context", "Context", "Sentence", " KWIC") if key in row and str(row[key]) != "nan"),
-            "",
-        )
-        pairs = [
-            (key, str(value)) for key, value in row.items()
-            if key not in ("Full_Context", "Context") and str(value) not in ("nan", "")
-        ][:10]
-        self.inspector._set("REVIEW CANDIDATE", context[:80] or "候选条目", [], pairs)
 
 
 # ======================================================================

@@ -227,6 +227,47 @@ class ProjectStore:
         return _read_json(self.root / "runs" / run_id / "manifest.json")
 
     # ------------------------------------------------------------------
+    # inter-rater reliability (honest statistic display)
+
+    def reliability_summary(self, limit: int = 6) -> List[Dict[str, Any]]:
+        """Judgment-field reliability rows with actual statistic values.
+
+        Rows look like {metric, field, value, pairs, interpretation}; a NaN
+        value stays "" so the UI never upgrades 'no data' into a pass.
+        """
+        path = self.root / "07_reports" / "validation_report.xlsx"
+        if not path.exists():
+            return []
+        try:
+            if "InterraterReliability" not in pd.ExcelFile(path).sheet_names:
+                return []
+            df = pd.read_excel(path, sheet_name="InterraterReliability")
+        except Exception:
+            return []
+        if df.empty:
+            return []
+        judgment_fields = {"is_correct", "error_type", "human_result", "frame_type",
+                           "polarity", "appraisal_type", "frame_code", "target_relation"}
+        rows: List[Dict[str, Any]] = []
+        for _, row in df.iterrows():
+            field_name = str(row.get("Field", ""))
+            if field_name and field_name not in judgment_fields:
+                continue
+            value = row.get("Value")
+            value_str = "" if value is None or pd.isna(value) else f"{float(value):.3f}"
+            rows.append({
+                "sheet": str(row.get("Sheet", "")),
+                "field": field_name,
+                "metric": str(row.get("Metric", "")),
+                "value": value_str,
+                "pairs": row.get("n_Pairs", ""),
+                "interpretation": str(row.get("Interpretation", "")),
+            })
+            if len(rows) >= limit:
+                break
+        return rows
+
+    # ------------------------------------------------------------------
     # overview status
 
     def _corpus_txt_count(self) -> int:
@@ -248,33 +289,75 @@ class ProjectStore:
             )
         return ""
 
-    def pipeline_status(self) -> List[Dict[str, str]]:
-        """Rows for the Overview pipeline table."""
+    def pipeline_status(
+        self,
+        health: Optional[tuple] = None,
+        source_progress: Optional[Dict[str, int]] = None,
+        country_pending: int = 0,
+        country_total: int = 0,
+        semantic_progress: Optional[Dict[str, int]] = None,
+    ) -> List[Dict[str, str]]:
+        """Rows for the Overview pipeline table.
+
+        Review rows are split (Phase 2A): source normalization review,
+        country review, semantic review, coder reconciliation, and
+        reliability each report their own state instead of one percentage.
+        ``health`` is a (HealthState, detail) tuple from gui_next.data.health.
+        """
         corpus_txt = self._corpus_txt_count()
-        failures = self.sanity_report.get("failures", {}) if self.sanity_report else {}
-        contaminated = failures.get("marker_lines_in_body", {}).get("count", 0)
-        if not self.sanity_report:
-            sanitation = ("–", "未运行", MUTED_ROLE) if corpus_txt else ("–", "无语料", MUTED_ROLE)
-        elif contaminated:
-            sanitation = (WARN, f"{contaminated} 篇污染", WARN_ROLE)
+
+        if health is not None:
+            state, detail = health
+            role = {"PASS": OK_ROLE, "WARNING": WARN_ROLE, "BLOCKED": "error",
+                    "STALE": WARN_ROLE, "UNKNOWN": MUTED_ROLE}.get(state.value, MUTED_ROLE)
+            sanitation = (state.value, detail, role)
         else:
-            sanitation = (OK, "通过", OK_ROLE)
+            sanitation = ("UNKNOWN", "未评估", MUTED_ROLE)
+
+        if source_progress and source_progress.get("total"):
+            decided, total = source_progress["decided"], source_progress["total"]
+            src_state = f"{decided}/{total}"
+            src_detail = "全部来源已复核" if decided >= total else f"待复核 {total - decided} 个来源"
+        else:
+            src_state, src_detail = "–", "无来源清单或未开始"
+
+        if country_total:
+            if country_pending:
+                country_state, country_detail = WARN, f"待复核 {country_pending} 条国别建议"
+            else:
+                country_state, country_detail = OK, "国别建议均已处理"
+        else:
+            country_state, country_detail = "–", "无国别建议(国别推断未运行)"
+
+        if semantic_progress and semantic_progress.get("total"):
+            coded, total = semantic_progress["coded"], semantic_progress["total"]
+            sem_state = f"{coded}/{total}"
+            sem_detail = "全部候选已编码" if coded >= total else f"待编码 {total - coded} 条候选"
+        else:
+            sem_state, sem_detail = "–", "无候选清单或未开始"
 
         review_files = self.review_files()
-        if review_files:
-            best = review_files[0]
-            review_state = (f"{best['percent']}%", best["name"], OK_ROLE if best["percent"] >= 100 else WARN_ROLE)
+        coder_files = [item for item in review_files if "coder" in item["name"]]
+        final_file = next((item for item in review_files if "FINAL" in item["name"]), None)
+        if final_file:
+            recon_state = OK
+            recon_detail = f"FINAL 已生成({len(coder_files)} 份编码文件)" if coder_files else "FINAL 已生成"
+        elif coder_files:
+            recon_state, recon_detail = WARN, f"{len(coder_files)} 份编码文件待调和"
         else:
-            review_state = ("–", "无复核文件", MUTED_ROLE)
+            recon_state, recon_detail = "–", "无双编码文件"
 
-        reliability = "–"
-        validation = self.root / "07_reports" / "validation_report.xlsx"
-        if validation.exists():
-            try:
-                if "InterraterReliability" in pd.ExcelFile(validation).sheet_names:
-                    reliability = "✓ 已计算"
-            except Exception:
-                pass
+        reliability_rows = self.reliability_summary()
+        judgment = next((row for row in reliability_rows
+                         if row["field"] in ("is_correct", "error_type") and row["value"]), None)
+        if judgment:
+            irr_state = WARN
+            irr_detail = (f"{judgment['metric']} = {judgment['value']} ({judgment['field']}, "
+                          f"n={judgment['pairs']}, {judgment['interpretation']}) — 统计值,非方法学通过")
+        elif reliability_rows:
+            irr_state, irr_detail = "–", "判定字段信度尚无数据(编码文件未调和)"
+        else:
+            irr_state, irr_detail = "–", "未生成信度报告"
 
         frozen = self.frozen_runs()
         final_run = (OK, frozen[-1].get("label") or frozen[-1].get("run_id", ""), OK_ROLE) if frozen else (PENDING, "未固化", MUTED_ROLE)
@@ -282,10 +365,12 @@ class ProjectStore:
         return [
             {"stage": "语料导入", "state": corpus_txt, "detail": f"{corpus_txt} 篇文档" if corpus_txt else "未导入"},
             {"stage": "语料卫生", "state": sanitation[0], "detail": sanitation[1]},
-            {"stage": "来源规范化", "state": OK if not self.sources_df.empty else "–", "detail": f"{len(self.sources_df)} 个机构" if not self.sources_df.empty else "未运行"},
+            {"stage": "来源规范化复核", "state": src_state, "detail": src_detail},
+            {"stage": "国别复核", "state": country_state, "detail": country_detail},
             {"stage": "分析", "state": OK if self.has_analysis() else PENDING, "detail": f"运行 {self.run_id[:13]}" if self.has_analysis() else "尚未运行"},
-            {"stage": "语义韵复核", "state": review_state[0], "detail": review_state[1]},
-            {"stage": "编码者信度", "state": OK if reliability.startswith("✓") else "–", "detail": reliability},
+            {"stage": "语义韵复核", "state": sem_state, "detail": sem_detail},
+            {"stage": "编码者调和", "state": recon_state, "detail": recon_detail},
+            {"stage": "编码者信度", "state": irr_state, "detail": irr_detail},
             {"stage": "最终运行固化", "state": final_run[0], "detail": final_run[1]},
         ]
 

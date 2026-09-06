@@ -31,9 +31,12 @@ from PySide6.QtWidgets import (
 )
 
 from gui_next import theme
+from gui_next.data.health import corpus_health
+from gui_next.data.review_store import SemanticReviewStore, SourceCountryReviewStore
 from gui_next.data.store import ProjectStore
 from gui_next.inspector import InspectorPanel
-from gui_next.pages import AnalysisPage, CorpusPage, OverviewPage, ReviewPage, RunsPage
+from gui_next.pages import AnalysisPage, CorpusPage, OverviewPage, RunsPage
+from gui_next.review_workbench import SemanticReviewWorkbench
 
 NAV_ITEMS = ["概览", "语料", "分析", "复核", "运行记录"]
 
@@ -148,15 +151,34 @@ class MainWindow(QMainWindow):
             return
         self.store = store
 
+        # Review stores (the only write-enabled components in gui-next).
+        source_review = SourceCountryReviewStore(store.root, documents_df=store.documents_df)
+        semantic_review = SemanticReviewStore(
+            store.root, kwic_df=store.kwic_df, documents_df=store.documents_df,
+        )
+
+        # Corpus health state machine (read-only fingerprint computation).
+        from shared.corpus_sanity import corpus_fingerprint as _fingerprint
+        try:
+            fingerprint = _fingerprint(store.root / "corpus")
+        except Exception:
+            fingerprint = None
+        health = corpus_health(store.root, store.sanity_report, fingerprint)
+
         # Rebuild pages for this project.
         for existing in list(self._pages.values()):
             self._stack.removeWidget(existing)
             existing.deleteLater()
         self._pages = {
-            "概览": OverviewPage(store, self.inspector, self._navigate),
-            "语料": CorpusPage(store, self.inspector),
+            "概览": OverviewPage(
+                store, self.inspector, self._navigate,
+                health=health, source_store=source_review, semantic_store=semantic_review,
+            ),
+            "语料": CorpusPage(
+                store, self.inspector, source_store=source_review, health=health,
+            ),
             "分析": AnalysisPage(store, self.inspector),
-            "复核": ReviewPage(store, self.inspector),
+            "复核": SemanticReviewWorkbench(semantic_review, self.inspector),
             "运行记录": RunsPage(store, self.inspector),
         }
         for key in NAV_ITEMS:
@@ -164,13 +186,9 @@ class MainWindow(QMainWindow):
         self.inspector.show_empty()
         self._nav.setCurrentRow(0)
 
-        report = store.sanity_report
-        if report:
-            health = "✓" if report.get("ok") else "⚠ 卫生检查未通过"
-        else:
-            health = "– 卫生检查未运行"
         self.statusBar().showMessage(
-            f"{store.name} · {len(store.documents_df)} documents · run #{store.run_id[-6:] or '–'} · corpus health {health}"
+            f"{store.name} · {len(store.documents_df)} documents · run #{store.run_id[-6:] or '–'}"
+            f" · corpus health {health[0].value}"
         )
 
     def _navigate(self, key: str) -> None:
