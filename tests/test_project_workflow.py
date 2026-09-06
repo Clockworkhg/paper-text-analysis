@@ -122,7 +122,7 @@ def _fake_s4(monkeypatch, kwic_rows=2):
 
     calls = {}
 
-    def fake_s4(corpus_dir, out_dir, targets, log_fn=None, mi_threshold=3.0, group_by="source"):
+    def fake_s4(corpus_dir, out_dir, targets, log_fn=None, mi_threshold=3.0, group_by="source", sanity=True):
         calls["group_by"] = group_by
         calls["out_dir"] = out_dir
         write_excel_with_readme(
@@ -226,3 +226,96 @@ def test_project_analyze_invalid_group_by_falls_back_to_source(tmp_path: Path, m
     project_analyze(tmp_path / "proj", group_by="nonsense")
 
     assert calls["group_by"] == "source"
+
+
+# ---------------------------------------------------------------------------
+# Step 0 sanity command + immutable frozen research runs
+# ---------------------------------------------------------------------------
+
+from shared.project_workflow import project_freeze, project_sanity
+
+POLLUTED_BODY = "<SOURCE>: inner\n\n----- BODY -----\n\nPolluted text about risk."
+
+
+def test_project_sanity_reports_pollution_and_writes_report(tmp_path: Path):
+    raw = tmp_path / "raw" / "Org"
+    raw.mkdir(parents=True)
+    (raw / "doc.txt").write_text(
+        f"<SOURCE>: outer\n\n----- BODY -----\n\n{POLLUTED_BODY}", encoding="utf-8"
+    )
+    init_project(tmp_path / "proj", corpus_type="policy", targets="risk")
+    project_import(tmp_path / "proj", input_path=tmp_path / "raw")
+
+    result = project_sanity(tmp_path / "proj")
+
+    assert result["ok"] is False
+    assert result["corpus"]["failures"]["header_tags_in_body"]["count"] == 1
+    report_path = Path(result["report"])
+    assert report_path.exists()
+
+
+def test_project_freeze_creates_immutable_manifest(tmp_path: Path, monkeypatch):
+    raw = tmp_path / "raw" / "Org"
+    raw.mkdir(parents=True)
+    (raw / "doc.txt").write_text("Risk and responsibility in policy.", encoding="utf-8")
+    init_project(tmp_path / "proj", corpus_type="policy", targets="risk")
+    project_import(tmp_path / "proj", input_path=tmp_path / "raw")
+    _fake_s4(monkeypatch, kwic_rows=3)
+    project_analyze(tmp_path / "proj", group_by="institution")
+
+    import json as json_mod
+
+    run_config = json_mod.loads(
+        (tmp_path / "proj" / "00_run_config" / "run_config.json").read_text(encoding="utf-8")
+    )
+
+    result = project_freeze(tmp_path / "proj", label="final-institution")
+
+    runs_dir = Path(result["frozen_run"])
+    assert runs_dir.name == run_config["run_id"]
+    assert (runs_dir / "adjectives_phrases.xlsx").exists()
+    assert (runs_dir / "06_review").exists()
+
+    manifest = json_mod.loads((runs_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["label"] == "final-institution"
+    assert manifest["parameters"]["group_by"] == "institution"
+    assert manifest["corpus_fingerprint"]["files"] >= 1
+    assert manifest["nlp_environment"]["spacy"]
+    assert manifest["git_commit"]
+    file_entry = next(f for f in manifest["files"] if f["path"] == "adjectives_phrases.xlsx")
+    assert len(file_entry["sha256"]) == 64
+
+    project = load_project(tmp_path / "proj")
+    assert project["frozen_runs"][-1]["run_id"] == run_config["run_id"]
+
+    # Immutability: freezing the same run again is refused.
+    import pytest
+    with pytest.raises(ValueError):
+        project_freeze(tmp_path / "proj")
+
+
+def test_project_freeze_requires_analysis(tmp_path: Path):
+    init_project(tmp_path / "proj", corpus_type="policy", targets="risk")
+    import pytest
+    with pytest.raises(FileNotFoundError):
+        project_freeze(tmp_path / "proj")
+
+
+def test_project_analyze_records_manifest_enrichment(tmp_path: Path, monkeypatch):
+    raw = tmp_path / "raw" / "Org"
+    raw.mkdir(parents=True)
+    (raw / "doc.txt").write_text("Risk and responsibility in policy.", encoding="utf-8")
+    init_project(tmp_path / "proj", corpus_type="policy", targets="risk")
+    project_import(tmp_path / "proj", input_path=tmp_path / "raw")
+
+    _fake_s4(monkeypatch)
+    project_analyze(tmp_path / "proj")
+
+    import json as json_mod
+    run_config = json_mod.loads(
+        (tmp_path / "proj" / "00_run_config" / "run_config.json").read_text(encoding="utf-8")
+    )
+    assert run_config["corpus_fingerprint"]["files"] == 1
+    assert run_config["nlp_environment"]["spacy"]
+    assert run_config["algorithm_version"]
+    assert run_config["hand_rules_version"]

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from argparse import Namespace
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -115,6 +116,24 @@ def _kwic_hit_total(root: Path) -> int:
         return 0
 
 
+def _warn_on_sanity_issues(root: Path) -> None:
+    """Post-import warning: metadata-marker pollution found in the new corpus."""
+    from shared.corpus_sanity import check_corpus_sanity
+
+    try:
+        report = check_corpus_sanity(root / "corpus")
+    except Exception:
+        return
+    if not report["ok"]:
+        _safe_console_print(
+            f"⚠ 语料卫生警告: {report['failures']['marker_lines_in_body']['count']} 篇文档正文含 "
+            "'----- xxx ----- ' 分隔线, "
+            f"{report['failures']['header_tags_in_body']['count']} 篇含 '<SOURCE>:' 头部标签。"
+            "导入源疑似已包装的中间格式 TXT；分析会因此被阻止，请改用原始 DOCX/干净正文重新导入"
+            "（运行 `project sanity` 查看详情）。"
+        )
+
+
 def project_import(
     project_dir: str | Path,
     *,
@@ -155,6 +174,8 @@ def project_import(
             group_col=group_col,
         )
 
+    _warn_on_sanity_issues(root)
+
     project["corpus_type"] = corpus_type
     project["targets"] = targets
     project["template"] = {
@@ -179,6 +200,7 @@ def project_analyze(
     force: bool = False,
     mi_threshold: float = 3.0,
     group_by: str = "source",
+    sanity: bool = True,
 ) -> Dict[str, str]:
     from shared.pipeline_steps import normalize_group_by
 
@@ -220,12 +242,24 @@ def project_analyze(
     # drops any previously joined country column; re-apply it so the
     # country grouping mode sees up-to-date labels.
     from shared.corpus_model import apply_country_to_registry
+    from shared.corpus_sanity import corpus_fingerprint
+    from shared.hand_rules import HAND_RULES_VERSION
+    from shared.research_output import ALGORITHM_VERSION, nlp_environment
+
     country_state = apply_country_to_registry(root)
     if country_state.get("updated"):
         _safe_console_print(
             f"国别已回写登记表: {country_state['matched']}/{country_state['documents']} 篇匹配"
             f"（未匹配 {country_state['unknown']} 篇 → Unknown）"
         )
+
+    # Research run manifest inputs: pin corpus, model stack, rule set and
+    # algorithm version so any output can be traced to exact inputs+code.
+    run_config["corpus_fingerprint"] = corpus_fingerprint(corpus)
+    run_config["nlp_environment"] = nlp_environment()
+    run_config["algorithm_version"] = ALGORITHM_VERSION
+    run_config["hand_rules_version"] = HAND_RULES_VERSION
+    write_run_config(root, run_config)
 
     state: Dict[str, Any] = {"corpus_model": model}
 
@@ -234,7 +268,7 @@ def project_analyze(
 
     state["s4"] = s4_extract_adjectives(
         str(corpus), str(root), targets, log_fn=_log,
-        mi_threshold=mi_threshold, group_by=group_by,
+        mi_threshold=mi_threshold, group_by=group_by, sanity=sanity,
     )
     outputs = {"analysis_output": state["s4"]["adj_excel_path"], "group_by": group_by, **model}
     if pos_translate:
@@ -292,6 +326,130 @@ def project_groups(project_dir: str | Path) -> Dict[str, Any]:
     return result
 
 
+def project_sanity(project_dir: str | Path) -> Dict[str, Any]:
+    """Run corpus + registry sanity checks and archive the report to 07_reports/."""
+    from shared.corpus_sanity import check_corpus_sanity, check_registry_sanity
+
+    project = load_project(project_dir)
+    root = Path(project["project_dir"])
+    corpus_report = check_corpus_sanity(root / "corpus")
+    registry_report = check_registry_sanity(root)
+    result = {
+        "ok": bool(corpus_report["ok"] and registry_report["ok"]),
+        "corpus": corpus_report,
+        "registry": registry_report,
+    }
+    report_path = root / "07_reports" / "corpus_sanity_report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    write_json(report_path, result)
+    result["report"] = str(report_path)
+    project["latest"]["sanity_report"] = str(report_path)
+    project["history"].append({"event": "sanity", "at": now_iso(), "ok": result["ok"]})
+    save_project(root, project)
+    return result
+
+
+FREEZE_ARTIFACTS = (
+    "run_config.json",
+    "adjectives_phrases.xlsx",
+    "adjectives_final.xlsx",
+    "merged_sources.xlsx",
+    "source_counts.xlsx",
+    "01_corpus/corpus_manifest.json",
+    "01_corpus/documents.csv",
+    "01_corpus/document_registry.xlsx",
+    "01_corpus/group_overrides.xlsx",
+    "03_country/source_countries.csv",
+)
+FREEZE_DIRS = ("06_review", "07_reports")
+
+
+def project_freeze(project_dir: str | Path, *, label: str = "") -> Dict[str, Any]:
+    """Freeze the current research run into an immutable snapshot.
+
+    Copies all key artifacts into ``runs/<run_id>/`` and writes a manifest
+    pinning parameters, corpus fingerprint, model/rule/algorithm versions,
+    git commit, and per-file sha256 hashes. Frozen runs are never modified:
+    to change parameters, run a new analysis and freeze that instead.
+    """
+    import shutil
+
+    from shared.corpus_sanity import corpus_fingerprint
+    from shared.research_output import git_commit, nlp_environment
+
+    project = load_project(project_dir)
+    root = Path(project["project_dir"])
+    if not (root / "adjectives_phrases.xlsx").exists():
+        raise FileNotFoundError("没有可固化的分析产物；请先运行 project analyze。")
+
+    run_config_path = root / "run_config.json"
+    run_config: Dict[str, Any] = {}
+    if run_config_path.exists():
+        run_config = json.loads(run_config_path.read_text(encoding="utf-8"))
+    run_id = run_config.get("run_id") or stable_id("run", [str(root), now_iso()])
+
+    runs_dir = root / "runs" / run_id
+    if runs_dir.exists():
+        raise ValueError(f"该运行已固化（不可覆盖）: {runs_dir}")
+
+    copied: List[Dict[str, Any]] = []
+
+    def _copy(rel_path: str) -> None:
+        src = root / rel_path
+        if not src.exists():
+            return
+        dst = runs_dir / rel_path
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        copied.append({
+            "path": rel_path,
+            "sha256": hashlib.sha256(dst.read_bytes()).hexdigest(),
+            "bytes": dst.stat().st_size,
+        })
+
+    for rel in FREEZE_ARTIFACTS:
+        _copy(rel)
+    for dirname in FREEZE_DIRS:
+        src_dir = root / dirname
+        if not src_dir.exists():
+            continue
+        for src in sorted(src_dir.rglob("*")):
+            if src.is_file():
+                _copy(src.relative_to(root).as_posix())
+
+    manifest = {
+        "manifest_version": "1.0",
+        "run_id": run_id,
+        "label": label,
+        "frozen_at": now_iso(),
+        "project_id": project.get("project_id", ""),
+        "project_name": project.get("name", ""),
+        "git_commit": git_commit(),
+        "parameters": {
+            "targets": run_config.get("targets", project.get("targets", "")),
+            "group_by": run_config.get("group_by", project.get("group_by", "source")),
+            "corpus_type": run_config.get("corpus_type", project.get("corpus_type", "")),
+        },
+        "corpus_fingerprint": run_config.get("corpus_fingerprint") or corpus_fingerprint(root / "corpus"),
+        "nlp_environment": run_config.get("nlp_environment") or nlp_environment(),
+        "algorithm_version": run_config.get("algorithm_version", ""),
+        "hand_rules_version": run_config.get("hand_rules_version", ""),
+        "files": copied,
+        "notes": "Frozen research run: treat as immutable. To change parameters, run a new analysis and freeze that run.",
+    }
+    write_json(runs_dir / "manifest.json", manifest)
+
+    frozen = project.setdefault("frozen_runs", [])
+    frozen.append({"run_id": run_id, "label": label, "at": manifest["frozen_at"],
+                   "dir": str(runs_dir), "files": len(copied)})
+    project["latest"]["frozen_run"] = str(runs_dir)
+    project["history"].append({"event": "freeze", "at": manifest["frozen_at"],
+                               "run_id": run_id, "label": label})
+    save_project(root, project)
+    return {"frozen_run": str(runs_dir), "run_id": run_id, "files": len(copied),
+            "manifest": str(runs_dir / "manifest.json")}
+
+
 def project_run(
     project_dir: str | Path,
     *,
@@ -307,6 +465,7 @@ def project_run(
     pos_translate: bool = False,
     mi_threshold: float = 3.0,
     group_by: str = "source",
+    sanity: bool = True,
 ) -> Dict[str, Dict[str, str]]:
     imported = project_import(
         project_dir,
@@ -327,6 +486,7 @@ def project_run(
         pos_translate=pos_translate,
         mi_threshold=mi_threshold,
         group_by=group_by,
+        sanity=sanity,
     )
     return {"import": imported, "analyze": analyzed}
 

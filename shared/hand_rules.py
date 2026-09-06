@@ -1,6 +1,11 @@
 import re
 from typing import Optional, Tuple
 
+# Version of the hand-maintained source normalization / country rule set.
+# Bump whenever COUNTRY_ALIASES, DEMONYM_TO_COUNTRY, CITY_TO_COUNTRY or the
+# canonical outlet rules change, so research run manifests can pin the rules.
+HAND_RULES_VERSION = "1.0"
+
 from shared.normalization import domain_canonical
 
 COUNTRY_ALIASES = {

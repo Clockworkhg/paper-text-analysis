@@ -214,3 +214,70 @@ def test_cli_group_by_defaults_and_choices():
 
     args = parser.parse_args(["run", "-i", "in.docx", "-o", "out", "--group-by", "institution"])
     assert args.group_by == "institution"
+
+
+# ---------------------------------------------------------------------------
+# Step 0: corpus sanity gate in s4
+# ---------------------------------------------------------------------------
+
+from shared.exceptions import CorpusSanityError
+
+
+POLLUTED_TXT = (
+    "<TITLE>: outer\n<SOURCE>: outer\n\n----- BODY -----\n\n"
+    "<SOURCE>: inner\n\n----- BODY -----\n\nChina is stable."
+)
+
+
+def _fake_process_module(monkeypatch, captured):
+    def fake_process_txt(input_path, output_path, targets, cfg, log_cb=None, group_map=None):
+        captured["ran"] = True
+        pd.DataFrame({"ok": [1]}).to_excel(output_path, index=False)
+
+    monkeypatch.setitem(sys.modules, "modules.txt_modifier_extractor_gui", types.SimpleNamespace(
+        process_txt=fake_process_txt,
+        split_targets=lambda text: [part.strip() for part in text.split(";") if part.strip()],
+    ))
+
+
+def test_s4_blocks_polluted_corpus(tmp_path: Path, monkeypatch):
+    corpus = tmp_path / "corpus" / "BBC"
+    corpus.mkdir(parents=True)
+    (corpus / "story.txt").write_text(POLLUTED_TXT, encoding="utf-8")
+    captured = {}
+    _fake_process_module(monkeypatch, captured)
+
+    try:
+        s4_extract_adjectives(str(tmp_path / "corpus"), str(tmp_path), "China")
+        raised = None
+    except CorpusSanityError as exc:
+        raised = exc
+    assert raised is not None
+    assert "语料卫生检查未通过" in str(raised)
+    assert captured.get("ran") is None
+
+
+def test_s4_sanity_skip_allows_polluted_corpus(tmp_path: Path, monkeypatch):
+    corpus = tmp_path / "corpus" / "BBC"
+    corpus.mkdir(parents=True)
+    (corpus / "story.txt").write_text(POLLUTED_TXT, encoding="utf-8")
+    captured = {}
+    _fake_process_module(monkeypatch, captured)
+
+    s4_extract_adjectives(str(tmp_path / "corpus"), str(tmp_path), "China", sanity=False)
+
+    assert captured.get("ran") is True
+
+
+def test_s4_sanity_passes_clean_corpus(tmp_path: Path, monkeypatch):
+    corpus = tmp_path / "corpus" / "BBC"
+    corpus.mkdir(parents=True)
+    (corpus / "story.txt").write_text(
+        "<SOURCE>: BBC\n\n----- BODY -----\n\nChina is stable.", encoding="utf-8"
+    )
+    captured = {}
+    _fake_process_module(monkeypatch, captured)
+
+    s4_extract_adjectives(str(tmp_path / "corpus"), str(tmp_path), "China")
+
+    assert captured.get("ran") is True

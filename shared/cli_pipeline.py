@@ -189,6 +189,7 @@ def _run_selected_steps(
         state["s4"] = s4_extract_adjectives(
             corpus_dir, str(out_dir), targets, log_fn=log,
             group_by=getattr(args, "group_by", "source"),
+            sanity=not getattr(args, "skip_sanity", False),
         )
         log("")
 

@@ -229,6 +229,7 @@ def s4_extract_adjectives(
     log_fn: Optional[Callable[[str], None]] = None,
     mi_threshold: float = 3.0,
     group_by: str = "source",
+    sanity: bool = True,
 ) -> Dict[str, Any]:
     from config import TxtAnalysisConfig
     from modules.txt_modifier_extractor_gui import process_txt, split_targets
@@ -237,6 +238,21 @@ def s4_extract_adjectives(
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     group_by = normalize_group_by(group_by)
+
+    if sanity:
+        from shared.corpus_sanity import check_corpus_sanity
+        from shared.exceptions import CorpusSanityError
+
+        report = check_corpus_sanity(corpus, log_fn=log_fn)
+        if not report["ok"]:
+            failures = report["failures"]
+            raise CorpusSanityError(
+                "语料卫生检查未通过: "
+                f"{failures['marker_lines_in_body']['count']}/{report['documents']} 篇文档正文含 '----- xxx ----- ' 分隔线, "
+                f"{failures['header_tags_in_body']['count']} 篇含 '<SOURCE>:' 等头部标签。"
+                "这通常是中间格式 TXT 被二次导入造成的元数据污染，会扭曲搭配与候选统计。"
+                "请改用原始 DOCX/干净正文重新导入后重跑；如确需跳过检查，使用 --skip-sanity（不推荐用于正式研究运行）。"
+            )
 
     all_txt_files = list(corpus.rglob("*.txt"))
     if not all_txt_files:

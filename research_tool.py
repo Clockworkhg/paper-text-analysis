@@ -70,6 +70,7 @@ def cmd_analyze(args):
         pos_translate=args.pos_translate,
         force=args.force,
         group_by=getattr(args, "group_by", "source"),
+        sanity=not getattr(args, "skip_sanity", False),
     )
     print(f"analysis_output: {outputs['analysis_output']}")
     return 0
@@ -149,11 +150,13 @@ def cmd_project(args):
     from shared.project_workflow import (
         init_project,
         project_analyze,
+        project_freeze,
         project_groups,
         project_import,
         project_review,
         project_report,
         project_run,
+        project_sanity,
         project_status,
     )
 
@@ -182,9 +185,14 @@ def cmd_project(args):
             force=args.force,
             mi_threshold=getattr(args, "mi_threshold", 3.0),
             group_by=getattr(args, "group_by", "source"),
+            sanity=not getattr(args, "skip_sanity", False),
         )
     elif args.project_command == "groups":
         result = project_groups(args.project)
+    elif args.project_command == "sanity":
+        result = project_sanity(args.project)
+    elif args.project_command == "freeze":
+        result = project_freeze(args.project, label=getattr(args, "label", ""))
     elif args.project_command == "review":
         result = project_review(args.project, sample_size=args.sample_size,
                                 dual_coder=getattr(args, "dual_coder", False))
@@ -203,6 +211,7 @@ def cmd_project(args):
             pos_translate=args.pos_translate,
             mi_threshold=getattr(args, "mi_threshold", 3.0),
             group_by=getattr(args, "group_by", "source"),
+            sanity=not getattr(args, "skip_sanity", False),
         )
     elif args.project_command == "status":
         result = project_status(args.project)
@@ -244,6 +253,8 @@ def build_parser():
     run.add_argument("--no-country", action="store_true", help="Disable online country inference")
     run.add_argument("--group-by", default="source", choices=("source", "institution", "country", "custom"),
                      help="Grouping variable for the comparison sheet (default: source header)")
+    run.add_argument("--skip-sanity", action="store_true",
+                     help="Skip the pre-analysis corpus sanity check (not recommended for research runs)")
     run.add_argument("--skip", default="", help="Pipeline steps to skip, e.g. 3,4")
     run.add_argument("--only", default="", help="Pipeline steps to run, e.g. 1,2")
     run.add_argument("--force", action="store_true", help="Force rerun existing outputs")
@@ -277,6 +288,8 @@ def build_parser():
     analyze.add_argument("--pos-translate", action="store_true", help="Also run POS/translation enrichment")
     analyze.add_argument("--group-by", default="source", choices=("source", "institution", "country", "custom"),
                          help="Grouping variable for the comparison sheet (default: source header)")
+    analyze.add_argument("--skip-sanity", action="store_true",
+                         help="Skip the pre-analysis corpus sanity check (not recommended for research runs)")
     analyze.add_argument("--force", action="store_true", help="Record force flag in run config")
     analyze.set_defaults(func=cmd_analyze)
 
@@ -334,6 +347,8 @@ def build_parser():
     p_analyze.add_argument("--mi-threshold", type=float, default=3.0, help="MI threshold for significant collocation (default 3.0)")
     p_analyze.add_argument("--group-by", default="source", choices=("source", "institution", "country", "custom"),
                            help="Grouping variable for the comparison sheet (default: source header)")
+    p_analyze.add_argument("--skip-sanity", action="store_true",
+                           help="Skip the pre-analysis corpus sanity check (not recommended for research runs)")
     p_analyze.add_argument("--force", action="store_true", help="Record force flag in run config")
     p_analyze.set_defaults(func=cmd_project)
 
@@ -358,7 +373,18 @@ def build_parser():
     p_run.add_argument("--mi-threshold", type=float, default=3.0, help="MI threshold for significant collocation (default 3.0)")
     p_run.add_argument("--group-by", default="source", choices=("source", "institution", "country", "custom"),
                        help="Grouping variable for the comparison sheet (default: source header)")
+    p_run.add_argument("--skip-sanity", action="store_true",
+                       help="Skip the pre-analysis corpus sanity check (not recommended for research runs)")
     p_run.set_defaults(func=cmd_project)
+
+    p_sanity = project_sub.add_parser("sanity", help="Run corpus/registry sanity checks and archive the report")
+    p_sanity.add_argument("-p", "--project", required=True, help="Project directory")
+    p_sanity.set_defaults(func=cmd_project)
+
+    p_freeze = project_sub.add_parser("freeze", help="Freeze the current run into an immutable snapshot (runs/<run_id>/)")
+    p_freeze.add_argument("-p", "--project", required=True, help="Project directory")
+    p_freeze.add_argument("--label", default="", help="Optional label, e.g. final-institution")
+    p_freeze.set_defaults(func=cmd_project)
 
     p_groups = project_sub.add_parser("groups", help="Generate the editable custom grouping template (group_overrides.xlsx)")
     p_groups.add_argument("-p", "--project", required=True, help="Project directory")

@@ -24,3 +24,7 @@ class AnalysisError(PipelineError):
 
 class NetworkError(PipelineError):
     """External API or SPARQL endpoint unreachable."""
+
+
+class CorpusSanityError(PipelineError):
+    """Corpus failed the pre-analysis sanity check (e.g. metadata-marker pollution)."""

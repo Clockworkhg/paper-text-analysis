@@ -4,6 +4,19 @@
 
 ### Added
 
+- Step-0 corpus sanity check (`project sanity`, plus a hard gate in every
+  analysis run): blocks analysis when document bodies contain metadata-marker
+  pollution (`----- xxx -----` lines / `<SOURCE>:` tags from double-wrapped
+  imports), and warns on empty/short/duplicate texts, replacement characters,
+  duplicate document ids, and missing registry files; reports are archived to
+  `07_reports/corpus_sanity_report.json`. `--skip-sanity` exists for
+  exploratory use only.
+- Research run freezing (`project freeze --label …`): snapshots the latest
+  run into an immutable `runs/<run_id>/` directory with a `manifest.json`
+  pinning parameters, corpus sha256 fingerprint, spaCy/NLTK model versions,
+  algorithm version, hand-rules version, git commit, and per-file hashes.
+- Run configs now record `corpus_fingerprint`, `nlp_environment`,
+  `algorithm_version`, and `hand_rules_version` for reproducibility.
 - Selectable grouping variable for the comparison sheet, available in the CLI
   (`--group-by` on `run`, `analyze`, `project analyze`, `project run`), the GUI
   project workbench and pipeline tabs, and persisted in `project.json`,

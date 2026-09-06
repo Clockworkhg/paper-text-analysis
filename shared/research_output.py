@@ -76,6 +76,21 @@ def environment_snapshot() -> Dict[str, Any]:
     }
 
 
+# Version of the analysis algorithm implemented in modules/txt_modifier_extractor.py.
+# Bump when extraction/grouping/scoring semantics change so run manifests can
+# distinguish results produced by different engine generations.
+ALGORITHM_VERSION = "1.1"
+
+
+def nlp_environment() -> Dict[str, Any]:
+    """Pin the NLP model stack (spaCy + installed model) for reproducibility."""
+    return {
+        "spacy": package_version("spacy"),
+        "en_core_web_sm": package_version("en_core_web_sm"),
+        "nltk": package_version("nltk"),
+    }
+
+
 def ensure_research_dirs(out_dir: Path) -> Dict[str, str]:
     dirs = {
         "run_config": out_dir / "00_run_config",
