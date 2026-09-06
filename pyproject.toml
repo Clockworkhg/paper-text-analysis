@@ -50,10 +50,14 @@ ocr = [
 online = [
     "openai>=1.0",
 ]
+gui = [
+    "PySide6>=6.6",
+]
 
 [project.scripts]
 cads = "research_tool:main"
 cads-gui = "integrated_app:main"
+cads-gui-next = "gui_next.app:main"
 
 [project.urls]
 Homepage = "https://github.com/Clockworkhg/paper-text-analysis"
@@ -68,6 +72,8 @@ packages = [
     "LexisWordToTxt",
     "LexisWordToTxt.app",
     "LexisWordToTxt.app.gui",
+    "gui_next",
+    "gui_next.data",
 ]
 
 [tool.setuptools.package-data]

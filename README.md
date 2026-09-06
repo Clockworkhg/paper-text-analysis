@@ -64,6 +64,9 @@ cads-gui
 
 - `research_tool.py`: primary CLI for daily use.
 - `integrated_app.py`: Tkinter desktop application.
+- `gui_next/`: PySide6 research evidence workbench (read-only Phase 1); run with
+  `python -m gui_next PROJECT_DIR` after `pip install -e ".[gui]"`. See
+  [GUI Next](docs/GUI_NEXT.md).
 - `pipeline.py`: legacy full-pipeline CLI.
 - `tools/ocr_scanned_pdfs.py`: OCR helper for scanned PDFs.
 

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0-unreleased - gui-next research workbench (Phase 1)
+
+### Added
+
+- New PySide6 front end `gui_next/` on the `gui-next` branch, read-only over
+  existing project outputs (analysis kernel untouched):
+  - Overview page: stat chips, research-pipeline status table, and an
+    "Analysis blocked" callout when the corpus sanity check failed;
+  - Corpus page: Documents / Sources / Health tabs with a Context Inspector;
+  - Analysis page: target-term-centric Concordance (virtualized 10k+ KWIC
+    rows) with Collocates (MI/G²) and Groups tabs, collocate→concordance
+    jump, and a permanent method-boundary note;
+  - Review page (read-only progress) and Runs page (frozen-run manifests);
+  - 340px Context Inspector for documents, KWIC lines, collocates, sources,
+    and run manifests; design tokens in `gui_next/theme.py`.
+- Entry point `cads-gui-next` and optional dependency extra `[gui]`
+  (PySide6>=6.6); headless tests in `tests/test_gui_next.py`.
+
 ## 0.3.0 - selectable grouping modes
 
 ### Added
