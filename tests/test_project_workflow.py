@@ -104,3 +104,125 @@ def test_project_report_summarizes_project(tmp_path: Path):
     assert "Policy text analysis" in text
     assert "Documents: 1" in text
     assert "KWIC" in text
+
+
+# ---------------------------------------------------------------------------
+# Grouping modes: group_by plumbing, persistence, and status fallback
+# ---------------------------------------------------------------------------
+
+import json
+import sys
+import types
+
+from shared.project_workflow import project_analyze, project_groups
+
+
+def _fake_s4(monkeypatch, kwic_rows=2):
+    from shared.research_output import write_excel_with_readme
+
+    calls = {}
+
+    def fake_s4(corpus_dir, out_dir, targets, log_fn=None, mi_threshold=3.0, group_by="source"):
+        calls["group_by"] = group_by
+        calls["out_dir"] = out_dir
+        write_excel_with_readme(
+            str(Path(out_dir) / "adjectives_phrases.xlsx"),
+            {
+                "KWIC": pd.DataFrame({"Target": ["risk"] * kwic_rows, "Full_Context": ["risk"] * kwic_rows}),
+                "Adjectives": pd.DataFrame({"Target": ["risk"], "Adjective": ["policy"], "Frequency": [1]}),
+                "Phrases": pd.DataFrame(),
+                "Collocates": pd.DataFrame(),
+                "SemanticProsodyCandidates": pd.DataFrame(),
+                "GroupComparison": pd.DataFrame({"Source_Group": ["Org"], "Group_By": [group_by]}),
+            },
+            title="Analysis",
+            description="Analysis",
+        )
+        return {"adj_excel_path": str(Path(out_dir) / "adjectives_phrases.xlsx"), "group_by": group_by}
+
+    monkeypatch.setattr("shared.project_workflow.s4_extract_adjectives", fake_s4)
+    return calls
+
+
+def test_project_analyze_records_group_by_and_persists_it(tmp_path: Path, monkeypatch):
+    raw = tmp_path / "raw" / "Org"
+    raw.mkdir(parents=True)
+    (raw / "doc.txt").write_text("Risk and responsibility in policy.", encoding="utf-8")
+    init_project(tmp_path / "proj", corpus_type="policy", targets="risk")
+    project_import(tmp_path / "proj", input_path=tmp_path / "raw")
+
+    calls = _fake_s4(monkeypatch)
+    outputs = project_analyze(tmp_path / "proj", group_by="institution")
+
+    assert calls["group_by"] == "institution"
+    assert outputs["group_by"] == "institution"
+
+    project = load_project(tmp_path / "proj")
+    assert project["group_by"] == "institution"
+    assert project["latest"]["group_by"] == "institution"
+    assert project["latest"]["target_hits_total"] == 2
+    assert project["history"][-1]["group_by"] == "institution"
+
+    run_config = json.loads(
+        (tmp_path / "proj" / "00_run_config" / "run_config.json").read_text(encoding="utf-8")
+    )
+    assert run_config["group_by"] == "institution"
+
+    status = project_status(tmp_path / "proj")
+    assert status["group_by"] == "institution"
+
+
+def test_project_status_falls_back_to_kwic_rows_when_registry_hits_are_zero(tmp_path: Path):
+    raw = tmp_path / "raw" / "Org"
+    raw.mkdir(parents=True)
+    (raw / "doc.txt").write_text("Risk and responsibility in policy.", encoding="utf-8")
+    init_project(tmp_path / "proj", corpus_type="policy", targets="")
+    project_import(tmp_path / "proj", input_path=tmp_path / "raw")
+
+    docs = pd.read_csv(tmp_path / "proj" / "01_corpus" / "documents.csv")
+    assert docs["target_hits_total"].sum() == 0
+
+    from shared.research_output import write_excel_with_readme
+
+    write_excel_with_readme(
+        str(tmp_path / "proj" / "adjectives_phrases.xlsx"),
+        {"KWIC": pd.DataFrame({"Target": ["risk"] * 7, "Full_Context": ["x"] * 7})},
+        title="Analysis",
+        description="Analysis",
+    )
+
+    status = project_status(tmp_path / "proj")
+    assert status["target_hits_total"] == 7
+
+
+def test_project_groups_generates_custom_template(tmp_path: Path):
+    raw = tmp_path / "raw" / "Org"
+    raw.mkdir(parents=True)
+    (raw / "doc.txt").write_text("Risk and responsibility in policy.", encoding="utf-8")
+    init_project(tmp_path / "proj", corpus_type="policy", targets="risk")
+    project_import(tmp_path / "proj", input_path=tmp_path / "raw")
+
+    result = project_groups(tmp_path / "proj")
+
+    template = Path(result["group_template"])
+    assert template.exists()
+    df = pd.read_excel(template)
+    assert list(df.columns) == ["source", "group", "country", "documents"]
+    assert list(df["source"]) == ["Org"]
+
+    project = load_project(tmp_path / "proj")
+    assert project["history"][-1]["event"] == "groups"
+    assert project["latest"]["group_overrides"] == str(template)
+
+
+def test_project_analyze_invalid_group_by_falls_back_to_source(tmp_path: Path, monkeypatch):
+    raw = tmp_path / "raw" / "Org"
+    raw.mkdir(parents=True)
+    (raw / "doc.txt").write_text("Risk and responsibility in policy.", encoding="utf-8")
+    init_project(tmp_path / "proj", corpus_type="policy", targets="risk")
+    project_import(tmp_path / "proj", input_path=tmp_path / "raw")
+
+    calls = _fake_s4(monkeypatch)
+    project_analyze(tmp_path / "proj", group_by="nonsense")
+
+    assert calls["group_by"] == "source"

@@ -33,8 +33,12 @@ Import a generic TXT/DOCX folder or CSV/Excel table:
 
 ```powershell
 python research_tool.py import -i raw_texts -o output --corpus-type policy -t "risk; responsibility"
-python research_tool.py analyze -o output -t "risk; responsibility"
+python research_tool.py analyze -o output -t "risk; responsibility" --group-by institution
 ```
+
+Group comparison supports `--group-by source|institution|country|custom`
+(raw source header, normalized outlet, per-source country, or an editable
+`01_corpus/group_overrides.xlsx` mapping, e.g. stance categories).
 
 Generate review templates and validation reports:
 

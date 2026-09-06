@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.3.0 - selectable grouping modes
+
+### Added
+
+- Selectable grouping variable for the comparison sheet, available in the CLI
+  (`--group-by` on `run`, `analyze`, `project analyze`, `project run`), the GUI
+  project workbench and pipeline tabs, and persisted in `project.json`,
+  `run_config.json`, and the workbook `Meta` sheet:
+  - `source` (default): raw `<SOURCE>` headers, previous behavior unchanged.
+  - `institution`: normalized outlet labels joined from the document registry;
+    analysis headers now carry `<SOURCE_NORM>`.
+  - `country`: per-source country labels joined back from `merged_sources.xlsx`
+    into the registry (`country` column) and written to
+    `03_country/source_countries.csv`; unmatched documents fall back to
+    institution grouping.
+  - `custom`: researcher-defined labels from an editable
+    `01_corpus/group_overrides.xlsx` mapping table (e.g. stance categories).
+- `python research_tool.py project groups` generates the custom grouping
+  template pre-filled with registry sources and known countries.
+- KWIC rows now include `Source_Normalized` and `Group` columns;
+  `GroupComparison` rows include `Group_By`.
+
+### Fixed
+
+- `project status` reports target hit totals from the analysis workbook when
+  the document registry was rebuilt (e.g. by a later import) with zeroed hit
+  counts.
+- Analysis output no longer attributes every document to the import folder:
+  KWIC `Source_Normalized` uses the registry outlet label while `Source`
+  keeps the raw header value.
+
+### Changed
+
+- Repository reorganized across phases 1-12: shared core layers, GUI package
+  (`modules/gui/`), consolidated CLI pipeline runner, project workflow
+  boundary, and packaging boundary, with compatibility wrappers retained.
+
 ## 0.2.0-research-workbench - 2026-05-21
 
 ### Added

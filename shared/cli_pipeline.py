@@ -186,7 +186,10 @@ def _run_selected_steps(
     if 4 in run_steps:
         log(f"[Step 4] {STEPS[4]}")
         corpus_dir = state.get("s1", {}).get("corpus_dir") or str(out_dir / "corpus")
-        state["s4"] = s4_extract_adjectives(corpus_dir, str(out_dir), targets, log_fn=log)
+        state["s4"] = s4_extract_adjectives(
+            corpus_dir, str(out_dir), targets, log_fn=log,
+            group_by=getattr(args, "group_by", "source"),
+        )
         log("")
 
     if 5 in run_steps:

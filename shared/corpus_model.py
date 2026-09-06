@@ -71,6 +71,185 @@ def split_targets(targets: str) -> List[str]:
     return [part.strip() for part in (targets or "").split(";") if part.strip()]
 
 
+def _normalize_source_key(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().lower()
+
+
+def load_country_mapping(out_dir: Path) -> Dict[str, str]:
+    """Read a Source_Merged -> Country mapping from merged_sources.xlsx."""
+    path = Path(out_dir) / "merged_sources.xlsx"
+    if not path.exists():
+        return {}
+    try:
+        df = pd.read_excel(path, sheet_name="WithCountry")
+    except Exception:
+        return {}
+    if df.empty or "Source_Merged" not in df.columns or "Country" not in df.columns:
+        return {}
+    mapping: Dict[str, str] = {}
+    for _, row in df.iterrows():
+        source = str(row.get("Source_Merged", "") or "").strip()
+        country = str(row.get("Country", "") or "").strip()
+        if source and country and country.lower() not in ("nan", "none", "unknown"):
+            mapping[source] = country
+    return mapping
+
+
+def match_country_for_source(source: str, mapping: Dict[str, str],
+                             fuzzy_threshold: int = 90) -> str:
+    """Resolve one normalized source name against a country mapping.
+
+    Tries exact match, whitespace/case-normalized match, then a rapidfuzz
+    token-set match (robust to parenthetical qualifiers such as
+    "Financial Times (London, England)"); returns "" when nothing is close
+    enough. Matched labels still require human review downstream.
+    """
+    if not mapping or not source:
+        return ""
+    if source in mapping:
+        return mapping[source]
+    by_norm = {_normalize_source_key(key): value for key, value in mapping.items()}
+    norm = _normalize_source_key(source)
+    if norm in by_norm:
+        return by_norm[norm]
+    try:
+        from rapidfuzz import fuzz, process
+        match = process.extractOne(
+            norm, list(by_norm.keys()),
+            scorer=fuzz.token_set_ratio, score_cutoff=fuzzy_threshold,
+        )
+        if match:
+            return by_norm[match[0]]
+    except Exception:
+        pass
+    return ""
+
+
+def apply_country_to_registry(out_dir: Path) -> Dict[str, Any]:
+    """Join merged_sources.xlsx country labels back into 01_corpus/documents.csv.
+
+    Also writes 03_country/source_countries.csv as the clean per-source
+    country table for review and grouping. Safe to call on outputs that lack
+    either file: the registry is left untouched and a reason is returned.
+    """
+    out_dir = Path(out_dir)
+    docs_path = out_dir / "01_corpus" / "documents.csv"
+    if not docs_path.exists():
+        return {"updated": False, "reason": "registry_missing"}
+    mapping = load_country_mapping(out_dir)
+    if not mapping:
+        return {"updated": False, "reason": "country_table_missing"}
+
+    docs = pd.read_csv(docs_path)
+    if "source_normalized" not in docs.columns or docs.empty:
+        return {"updated": False, "reason": "source_column_missing"}
+
+    countries: List[str] = []
+    matched = 0
+    for source in docs["source_normalized"].fillna("Unknown").astype(str):
+        country = match_country_for_source(source, mapping)
+        countries.append(country or "Unknown")
+        if country:
+            matched += 1
+    docs["country"] = countries
+    docs.to_csv(docs_path, index=False, encoding="utf-8-sig")
+
+    country_dir = out_dir / "03_country"
+    country_dir.mkdir(parents=True, exist_ok=True)
+    per_source = pd.DataFrame({
+        "Source_Normalized": docs["source_normalized"].astype(str),
+        "Country": docs["country"].astype(str),
+    }).drop_duplicates().sort_values("Source_Normalized")
+    per_source.to_csv(country_dir / "source_countries.csv", index=False, encoding="utf-8-sig")
+
+    return {
+        "updated": True,
+        "documents": len(docs),
+        "matched": matched,
+        "unknown": len(docs) - matched,
+        "source_countries_csv": str(country_dir / "source_countries.csv"),
+    }
+
+
+def load_group_overrides(out_dir: Path) -> Dict[str, str]:
+    """Read the optional 01_corpus/group_overrides.xlsx custom mapping table.
+
+    Expected columns: ``source`` (matches registry source_normalized) and
+    ``group`` (the user-defined grouping label, e.g. a stance category).
+    """
+    path = Path(out_dir) / "01_corpus" / "group_overrides.xlsx"
+    if not path.exists():
+        return {}
+    try:
+        df = pd.read_excel(path)
+    except Exception:
+        return {}
+    if df.empty:
+        return {}
+    cols = {str(col).strip().lower(): col for col in df.columns}
+    source_col = cols.get("source")
+    group_col = cols.get("group")
+    if not source_col or not group_col:
+        return {}
+    mapping: Dict[str, str] = {}
+    for _, row in df.iterrows():
+        source = str(row[source_col] or "").strip()
+        group = str(row[group_col] or "").strip()
+        if source and group and group.lower() not in ("nan", "none"):
+            mapping[source] = group
+    return mapping
+
+
+def write_group_template(out_dir: Path) -> Dict[str, str]:
+    """Write 01_corpus/group_overrides.xlsx pre-filled with registry sources.
+
+    The ``group`` column is left blank for the researcher to fill (e.g. with
+    stance/ideology categories); a known ``country`` column is pre-filled to
+    serve as a starting point.
+    """
+    out_dir = Path(out_dir)
+    docs_path = out_dir / "01_corpus" / "documents.csv"
+    if not docs_path.exists():
+        raise FileNotFoundError(f"Document registry not found: {docs_path}")
+    docs = pd.read_csv(docs_path)
+    if "source_normalized" not in docs.columns:
+        raise ValueError("Document registry lacks source_normalized column")
+
+    per_source = (
+        docs.groupby(docs["source_normalized"].fillna("Unknown").astype(str))
+        .size().rename("documents").reset_index().rename(columns={"source_normalized": "source"})
+    )
+    if "country" in docs.columns:
+        country_map = (
+            docs.assign(source=docs["source_normalized"].fillna("Unknown").astype(str))
+            .dropna(subset=["country"])
+            .groupby("source")["country"].agg(lambda s: s.mode().iat[0])
+        )
+        per_source["country"] = per_source["source"].map(country_map).fillna("")
+    else:
+        per_source["country"] = ""
+    per_source["group"] = ""
+    per_source = per_source.sort_values("documents", ascending=False)
+
+    model_dir = out_dir / "01_corpus"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    template_path = model_dir / "group_overrides.xlsx"
+    write_excel_with_readme(
+        str(template_path),
+        {"GroupOverrides": per_source[["source", "group", "country", "documents"]]},
+        title="Custom grouping overrides",
+        description="Editable source-to-group mapping used by the 'custom' grouping mode. Fill the group column, keep the source column unchanged.",
+        fields={
+            "source": "Normalized source label from the document registry; the join key.",
+            "group": "User-defined grouping label (e.g. stance category). Leave blank to fall back to institution grouping.",
+            "country": "Known country label when available; informational only.",
+            "documents": "Number of documents for this source.",
+        },
+        parameters={"sources": len(per_source)},
+    )
+    return {"group_template": str(template_path), "sources": len(per_source)}
+
+
 def build_documents_dataframe(
     corpus_dir: Path,
     corpus_id: str,
@@ -180,6 +359,7 @@ def data_model_spec() -> Dict[str, Any]:
             "source_raw": "Raw source metadata extracted from the input.",
             "source_normalized": "Normalized source/group label when available.",
             "group_label": "Default grouping variable for comparisons.",
+            "country": "Source country/region joined from merged_sources.xlsx when country inference ran; requires human review.",
             "relative_path": "Path relative to the legacy corpus directory.",
             "word_count_approx": "Approximate token count.",
             "target_hits_total": "Total hits for configured target terms.",

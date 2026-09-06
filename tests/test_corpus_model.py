@@ -55,3 +55,87 @@ def test_write_corpus_model_outputs_manifest_and_registry(tmp_path: Path):
 
     docs = pd.read_csv(paths["documents_csv"])
     assert list(docs["corpus_type"]) == ["policy"]
+
+
+# ---------------------------------------------------------------------------
+# Country join + custom grouping template (grouping modes)
+# ---------------------------------------------------------------------------
+
+from shared.corpus_model import (  # noqa: E402
+    apply_country_to_registry,
+    load_group_overrides,
+    match_country_for_source,
+    write_group_template,
+)
+
+
+def _write_registry(tmp_path: Path, sources):
+    model_dir = tmp_path / "01_corpus"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"source_normalized": sources}).to_csv(
+        model_dir / "documents.csv", index=False, encoding="utf-8-sig"
+    )
+
+
+def _write_country_table(tmp_path: Path, rows):
+    df = pd.DataFrame(rows, columns=["Source_Merged", "Country"])
+    with pd.ExcelWriter(tmp_path / "merged_sources.xlsx", engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="WithCountry", index=False)
+
+
+def test_match_country_exact_normalized_and_fuzzy():
+    mapping = {"AFP": "France", "BBC  News": "UK", "Financial Times": "UK"}
+
+    assert match_country_for_source("AFP", mapping) == "France"
+    assert match_country_for_source("bbc news", mapping) == "UK"
+    assert match_country_for_source("Financial Times (London)", mapping) == "UK"
+    assert match_country_for_source("Mystery Blog", mapping) == ""
+    assert match_country_for_source("AFP", {}) == ""
+
+
+def test_apply_country_to_registry_joins_and_writes_source_table(tmp_path: Path):
+    _write_registry(tmp_path, ["AFP", "bbc news", "Mystery Blog"])
+    _write_country_table(tmp_path, [("AFP", "France"), ("BBC News", "UK")])
+
+    result = apply_country_to_registry(tmp_path)
+
+    assert result["updated"] is True
+    assert result["documents"] == 3
+    assert result["matched"] == 2
+    assert result["unknown"] == 1
+
+    docs = pd.read_csv(tmp_path / "01_corpus" / "documents.csv")
+    assert list(docs["country"]) == ["France", "UK", "Unknown"]
+
+    per_source = pd.read_csv(tmp_path / "03_country" / "source_countries.csv")
+    assert set(per_source.columns) == {"Source_Normalized", "Country"}
+
+
+def test_apply_country_to_registry_handles_missing_inputs(tmp_path: Path):
+    assert apply_country_to_registry(tmp_path) == {"updated": False, "reason": "registry_missing"}
+
+    _write_registry(tmp_path, ["AFP"])
+    assert apply_country_to_registry(tmp_path) == {"updated": False, "reason": "country_table_missing"}
+
+
+def test_write_group_template_and_load_overrides(tmp_path: Path):
+    _write_registry(tmp_path, ["AFP", "AFP", "BBC News"])
+
+    result = write_group_template(tmp_path)
+    template_path = Path(result["group_template"])
+
+    assert template_path.exists()
+    assert result["sources"] == 2
+
+    # Empty group column -> no usable overrides yet.
+    assert load_group_overrides(tmp_path) == {}
+
+    # Fill the group column as a researcher would.
+    df = pd.read_excel(template_path)
+    df["group"] = df["group"].fillna("").astype(str)
+    df.loc[df["source"] == "AFP", "group"] = "Western wire"
+    df.loc[df["source"] == "BBC News", "group"] = "UK public"
+    df.to_excel(template_path, index=False)
+
+    overrides = load_group_overrides(tmp_path)
+    assert overrides == {"AFP": "Western wire", "BBC News": "UK public"}

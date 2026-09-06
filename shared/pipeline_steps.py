@@ -149,8 +149,77 @@ def s3_merge_and_country(
         verbose=True,
     )
 
+    from shared.corpus_model import apply_country_to_registry
+    try:
+        country_state = apply_country_to_registry(out)
+        if country_state.get("updated"):
+            _log(
+                log_fn,
+                f"  国别已回写登记表: {country_state['matched']}/{country_state['documents']} 篇匹配"
+                f"（未匹配 {country_state['unknown']} 篇 → Unknown）",
+            )
+    except Exception as exc:
+        _log(log_fn, f"  ⚠ 国别回写登记表失败: {exc}", "warning")
+
     _log(log_fn, f"  output: {merged_path}")
     return {"merged_path": str(merged_path)}
+
+
+GROUPING_MODES = ("source", "institution", "country", "custom")
+
+
+def normalize_group_by(value: str) -> str:
+    mode = (value or "source").strip().lower()
+    return mode if mode in GROUPING_MODES else "source"
+
+
+def _build_group_map(
+    out: Path,
+    registry: Dict[str, Dict[str, Any]],
+    group_by: str,
+    log_fn: Optional[Callable[[str], None]] = None,
+) -> Dict[str, str]:
+    """Build a document/source -> group-label map for country/custom modes."""
+    from shared.corpus_model import load_group_overrides
+
+    group_map: Dict[str, str] = {}
+    if group_by == "custom":
+        overrides = load_group_overrides(out)
+        if not overrides:
+            _log(
+                log_fn,
+                "  ⚠ 未找到 01_corpus/group_overrides.xlsx（或缺少 source/group 列），"
+                "自定义分组回退为按媒体机构分组。",
+                "warning",
+            )
+            return group_map
+        group_map.update(overrides)
+
+    keyed: Dict[str, str] = {}
+    has_country_column = False
+    for meta in registry.values():
+        source = str(meta.get("source_normalized", "") or "").strip()
+        document_id = str(meta.get("document_id", "") or "").strip()
+        label = ""
+        if group_by == "country":
+            label = str(meta.get("country", "") or "").strip()
+            has_country_column = has_country_column or bool(str(meta.get("country", "")) not in ("", "nan", "None"))
+        elif group_by == "custom" and source:
+            label = overrides.get(source, "")
+        if not label:
+            continue
+        if source:
+            keyed.setdefault(source, label)
+        if document_id:
+            keyed.setdefault(document_id, label)
+    if group_by == "country" and not has_country_column:
+        _log(
+            log_fn,
+            "  ⚠ 登记表缺少 country 列（先运行步骤 3 机构合并+国别），国别分组回退为按媒体机构分组。",
+            "warning",
+        )
+    group_map.update(keyed)
+    return group_map
 
 
 def s4_extract_adjectives(
@@ -159,6 +228,7 @@ def s4_extract_adjectives(
     targets: str,
     log_fn: Optional[Callable[[str], None]] = None,
     mi_threshold: float = 3.0,
+    group_by: str = "source",
 ) -> Dict[str, Any]:
     from config import TxtAnalysisConfig
     from modules.txt_modifier_extractor_gui import process_txt, split_targets
@@ -166,6 +236,7 @@ def s4_extract_adjectives(
     corpus = Path(corpus_dir)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    group_by = normalize_group_by(group_by)
 
     all_txt_files = list(corpus.rglob("*.txt"))
     if not all_txt_files:
@@ -184,6 +255,10 @@ def s4_extract_adjectives(
         except Exception:
             registry = {}
 
+    group_map: Dict[str, str] = {}
+    if group_by in ("country", "custom"):
+        group_map = _build_group_map(out, registry, group_by, log_fn=log_fn)
+
     merged_txt = out / "_corpus_merged.txt"
     skipped = 0
     with open(merged_txt, "w", encoding="utf-8") as f:
@@ -199,6 +274,7 @@ def s4_extract_adjectives(
 
                     header_lines = [
                         f"<DOCUMENT_ID>: {_meta_value('document_id')}",
+                        f"<SOURCE_NORM>: {_meta_value('source_normalized')}",
                         f"<CORPUS_ID>: {_meta_value('corpus_id')}",
                         f"<RUN_ID>: {_meta_value('run_id')}",
                     ]
@@ -216,6 +292,7 @@ def s4_extract_adjectives(
 
     target_list = split_targets(targets)
     _log(log_fn, f"  \u68c0\u7d22\u76ee\u6807: {target_list}")
+    _log(log_fn, f"  \u5206\u7ec4\u65b9\u5f0f: {group_by}")
 
     adj_excel = out / "adjectives_phrases.xlsx"
     cfg = TxtAnalysisConfig(
@@ -227,6 +304,7 @@ def s4_extract_adjectives(
         max_doc_chars=200000,
         use_online_judge=False,
         mi_threshold=mi_threshold,
+        group_by=group_by,
     )
 
     process_txt(
@@ -235,10 +313,11 @@ def s4_extract_adjectives(
         targets=target_list,
         cfg=cfg,
         log_cb=log_fn if log_fn else lambda msg: None,
+        group_map=group_map or None,
     )
 
     _log(log_fn, f"  output: {adj_excel}")
-    return {"adj_excel_path": str(adj_excel)}
+    return {"adj_excel_path": str(adj_excel), "group_by": group_by}
 
 
 def s5_pos_and_translate(

@@ -110,6 +110,7 @@ def build_run_config(args: Any, steps_to_run: Iterable[int], run_steps: Iterable
         "output": str(out_dir.absolute()),
         "targets": getattr(args, "targets", ""),
         "country_lookup_enabled": bool(getattr(args, "country", False)),
+        "group_by": str(getattr(args, "group_by", "source") or "source"),
         "force": bool(getattr(args, "force", False)),
         "skip": getattr(args, "skip", ""),
         "only": getattr(args, "only", ""),

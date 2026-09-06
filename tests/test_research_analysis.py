@@ -112,3 +112,109 @@ def test_create_validation_report_reads_completed_review(tmp_path: Path):
     assert row["Reviewed"] == 2
     assert row["Correct"] == 1
     assert row["Accuracy"] == 0.5
+
+
+# ---------------------------------------------------------------------------
+# Grouping modes in the analysis engine (requires spaCy)
+# ---------------------------------------------------------------------------
+
+import pytest
+
+from config import TxtAnalysisConfig
+from modules.txt_modifier_extractor import process_txt, resolve_group_label
+
+
+def _spacy_available() -> bool:
+    try:
+        import spacy
+        spacy.load("en_core_web_sm")
+        return True
+    except Exception:
+        return False
+
+
+requires_spacy = pytest.mark.skipif(not _spacy_available(), reason="spaCy/en_core_web_sm unavailable")
+
+
+def _synthetic_corpus(tmp_path):
+    docs = []
+    for source, source_norm, doc_id in (
+        ("BBC News", "BBC", "doc_a"),
+        ("Voice of News", "VOA", "doc_b"),
+    ):
+        docs.append(
+            f"<DOCUMENT_ID>: {doc_id}\n<SOURCE>: {source}\n<SOURCE_NORM>: {source_norm}\n"
+            f"<TITLE>: Story\n\n----- BODY -----\n\n"
+            f"China faces serious pressure. Observers warn the situation is difficult."
+        )
+    corpus = tmp_path / "merged.txt"
+    corpus.write_text("\n\n==========\n\n".join(docs), encoding="utf-8")
+    return corpus
+
+
+def _run_process_txt(tmp_path, group_by, group_map=None):
+    corpus = _synthetic_corpus(tmp_path)
+    output = tmp_path / "out.xlsx"
+    cfg = TxtAnalysisConfig(
+        split_mode="regex",
+        split_regex="====LINE====",
+        window_tokens=8,
+        phrase_max_tokens=6,
+        group_by=group_by,
+    )
+    process_txt(str(corpus), str(output), ["China"], cfg, group_map=group_map)
+    return pd.ExcelFile(output)
+
+
+def test_resolve_group_label_modes():
+    meta = {"Source": "BBC News", "Source_Norm": "BBC", "Document_ID": "doc_a"}
+    assert resolve_group_label(meta, "source") == "BBC News"
+    assert resolve_group_label(meta, "institution") == "BBC"
+    assert resolve_group_label(meta, "country", {"doc_a": "UK"}) == "UK"
+    assert resolve_group_label(meta, "country", {"BBC": "UK"}) == "UK"
+    # No mapping entry -> fall back to institution-level label, not Unknown.
+    assert resolve_group_label(meta, "country", {}) == "BBC"
+    assert resolve_group_label(meta, "custom", {"doc_a": "Anglosphere"}) == "Anglosphere"
+    assert resolve_group_label({"Source": "X", "Source_Norm": "", "Document_ID": ""}, "institution") == "X"
+
+
+@requires_spacy
+def test_process_txt_source_mode_keeps_raw_header_groups(tmp_path):
+    xls = _run_process_txt(tmp_path, "source")
+    group = xls.parse("GroupComparison")
+    assert set(group["Group_By"]) == {"source"}
+    assert set(group["Source_Group"]) == {"BBC News", "Voice of News"}
+
+
+@requires_spacy
+def test_process_txt_institution_mode_groups_by_normalized_source(tmp_path):
+    xls = _run_process_txt(tmp_path, "institution")
+    group = xls.parse("GroupComparison")
+    assert set(group["Group_By"]) == {"institution"}
+    assert set(group["Source_Group"]) == {"BBC", "VOA"}
+
+    kwic = xls.parse("KWIC")
+    assert "Source_Normalized" in kwic.columns
+    assert "Group" in kwic.columns
+    assert set(kwic["Source_Normalized"]) == {"BBC", "VOA"}
+    assert set(kwic["Group"]) == {"BBC", "VOA"}
+
+
+@requires_spacy
+def test_process_txt_country_mode_uses_group_map(tmp_path):
+    group_map = {"doc_a": "United Kingdom", "doc_b": "United States"}
+    xls = _run_process_txt(tmp_path, "country", group_map=group_map)
+    group = xls.parse("GroupComparison")
+    assert set(group["Group_By"]) == {"country"}
+    assert set(group["Source_Group"]) == {"United Kingdom", "United States"}
+
+    kwic = xls.parse("KWIC")
+    assert set(kwic["Group"]) == {"United Kingdom", "United States"}
+
+
+@requires_spacy
+def test_process_txt_meta_records_group_by(tmp_path):
+    xls = _run_process_txt(tmp_path, "institution", group_map={"BBC": "BBC"})
+    meta = xls.parse("Meta")
+    assert meta.iloc[0]["Group_By"] == "institution"
+    assert meta.iloc[0]["Group_Map_Size"] == 1

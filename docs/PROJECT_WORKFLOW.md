@@ -33,6 +33,34 @@ python research_tool.py project analyze -p my_project
 
 Use `--pos-translate` to also generate `adjectives_final.xlsx`.
 
+Choose the grouping variable for the comparison sheet with `--group-by`:
+
+```powershell
+python research_tool.py project analyze -p my_project --group-by institution
+```
+
+- `source` (default): raw `<SOURCE>` headers from the corpus TXT files.
+- `institution`: normalized outlet labels from the document registry.
+- `country`: per-source country labels (run `project run`/step 3 first; unmatched
+  documents fall back to institution grouping). The joined labels require human review.
+- `custom`: researcher-defined labels from `01_corpus/group_overrides.xlsx` —
+  generate the template, fill its `group` column (e.g. stance categories), then rerun.
+
+The chosen mode is stored in `project.json` and `run_config.json` and appears as
+the `Group_By` column in the `GroupComparison` sheet; KWIC rows carry
+`Source_Normalized` and `Group` columns. To switch dimension, rerun step 4 with
+a different `--group-by`.
+
+## Grouping Template
+
+```powershell
+python research_tool.py project groups -p my_project
+```
+
+This writes `01_corpus/group_overrides.xlsx` pre-filled with the project's
+normalized sources (and known countries). Edit the `group` column, then run
+`project analyze --group-by custom`.
+
 ## Review
 
 ```powershell

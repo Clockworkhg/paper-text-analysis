@@ -42,6 +42,14 @@ class TabPipeline(ToolTab):
         for i, lb in enumerate(labels, 1):
             ttk.Checkbutton(sf, text=lb, variable=self.step_vars[i]).grid(row=0, column=i-1, padx=6, pady=4)
 
+        gf = ttk.Frame(self)
+        gf.grid(row=row, column=0, sticky="ew", **pad); row += 1
+        ttk.Label(gf, text="分组方式:", width=18, anchor="e").pack(side="left", padx=(0, 6))
+        self.group_var = tk.StringVar(value="source")
+        ttk.Combobox(gf, textvariable=self.group_var, state="readonly", width=22,
+                     values=("source", "institution", "country", "custom")).pack(side="left")
+        ttk.Label(gf, text="(对比表分组: 原始表头/媒体机构/国别/自定义)").pack(side="left", padx=(6, 0))
+
         bf = ttk.Frame(self)
         bf.grid(row=row, column=0, sticky="ew", **pad); row += 1
         ttk.Checkbutton(bf, text="联网推断国别", variable=self.country_var).pack(side="left")
@@ -111,6 +119,7 @@ class TabPipeline(ToolTab):
                     corpus_dir=corpus_dir,
                     pos_translate=(5 in steps),
                     force=force,
+                    group_by=self.group_var.get(),
                 )
                 state["s4"] = {"adj_excel_path": analyze_outputs["analysis_output"]}
                 if 5 in steps and "pos_translation_output" in analyze_outputs:

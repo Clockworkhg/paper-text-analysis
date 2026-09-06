@@ -10,7 +10,7 @@ import os
 import re
 import math
 from collections import Counter, defaultdict
-from typing import List, Tuple, Dict, Set
+from typing import List, Optional, Tuple, Dict, Set
 
 import pandas as pd
 
@@ -197,6 +197,7 @@ def _is_valid_modifier(lemma: str, target: str) -> bool:
 def parse_doc_metadata(text: str) -> Dict[str, str]:
     meta = {
         "Source": "Unknown",
+        "Source_Norm": "",
         "Date": "",
         "Title": "",
         "Document_ID": "",
@@ -212,6 +213,8 @@ def parse_doc_metadata(text: str) -> Dict[str, str]:
             line = line.strip()
             if line.startswith("<SOURCE>:"):
                 meta["Source"] = line.split(":", 1)[1].strip() or "Unknown"
+            elif line.startswith("<SOURCE_NORM>:"):
+                meta["Source_Norm"] = line.split(":", 1)[1].strip()
             elif line.startswith("<DATE>:"):
                 meta["Date"] = line.split(":", 1)[1].strip()
             elif line.startswith("<TITLE>:"):
@@ -223,6 +226,30 @@ def parse_doc_metadata(text: str) -> Dict[str, str]:
             elif line.startswith("<RUN_ID>:"):
                 meta["Run_ID"] = line.split(":", 1)[1].strip()
     return meta
+
+
+def resolve_group_label(meta: Dict[str, str], group_by: str,
+                        group_map: Optional[Dict[str, str]] = None) -> str:
+    """Resolve the grouping label for one document under a group_by mode.
+
+    Lookup order for country/custom modes: document_id, then normalized
+    source, then raw source; falls back to the normalized source so partially
+    mapped corpora still group by institution instead of collapsing.
+    """
+    mode = (group_by or "source").strip().lower()
+    source_raw = meta.get("Source") or "Unknown"
+    source_norm = meta.get("Source_Norm") or ""
+    document_id = meta.get("Document_ID") or ""
+    if mode == "institution":
+        return source_norm or source_raw
+    if mode in ("country", "custom"):
+        for key in (document_id, source_norm, source_raw):
+            if key and group_map and key in group_map:
+                label = group_map.get(key)
+                if label:
+                    return label
+        return source_norm or source_raw
+    return source_raw
 
 
 def context_text(doc, start_i: int, end_i: int, window_tokens: int) -> Tuple[str, str, str]:
@@ -434,6 +461,7 @@ def process_txt(
     cfg: Config,
     progress_cb=None,
     log_cb=None,
+    group_map: Optional[Dict[str, str]] = None,
 ):
     if not os.path.exists(input_path):
         raise FileNotFoundError("Input file does not exist.")
@@ -481,6 +509,9 @@ def process_txt(
     doc_bodies = [m["Body"] for m in doc_metas]
     corpus_id = next((m.get("Corpus_ID", "") for m in doc_metas if m.get("Corpus_ID")), "")
     run_id = next((m.get("Run_ID", "") for m in doc_metas if m.get("Run_ID")), "")
+    group_by = (getattr(cfg, "group_by", "source") or "source").strip().lower()
+    if log_cb:
+        log_cb(f"分组方式: {group_by}" + (f" (映射条目: {len(group_map)})" if group_map else ""))
 
     def stable_doc_id(doc_index: int) -> str:
         meta = doc_metas[doc_index] if 0 <= doc_index < len(doc_metas) else {}
@@ -497,6 +528,8 @@ def process_txt(
         total_tokens_corpus += token_count_approx(text)
         meta = doc_metas[i]
         source_group = meta.get("Source") or "Unknown"
+        source_norm = meta.get("Source_Norm") or ""
+        group_label = resolve_group_label(meta, group_by, group_map)
 
         for tok in doc:
             if tok.is_stop or tok.is_punct or tok.is_space or tok.pos_ not in CONTENT_POS:
@@ -521,6 +554,8 @@ def process_txt(
                 "Corpus_ID": meta.get("Corpus_ID") or corpus_id,
                 "Run_ID": meta.get("Run_ID") or run_id,
                 "Source": source_group,
+                "Source_Normalized": source_norm,
+                "Group": group_label,
                 "Date": meta.get("Date", ""),
                 "Title": meta.get("Title", ""),
                 "Target": t,
@@ -536,7 +571,7 @@ def process_txt(
                 collocate_pos[t][collocate][pos] += 1
                 if len(collocate_examples[t][collocate]) < 3:
                     collocate_examples[t][collocate].append(clean_phrase(f"{left_context} {keyword} {right_context}"))
-                group_key = (source_group, t, "collocate", collocate)
+                group_key = (group_label, t, "collocate", collocate)
                 group_freq[group_key]["Frequency"] += 1
                 group_docs[group_key].add(docid)
 
@@ -549,7 +584,7 @@ def process_txt(
                     continue
                 adj_freq[t][a] = adj_freq[t].get(a, 0) + 1
                 adj_docs[t].setdefault(a, set()).add(docid)
-                group_key = (source_group, t, "adjective", a)
+                group_key = (group_label, t, "adjective", a)
                 group_freq[group_key]["Frequency"] += 1
                 group_docs[group_key].add(docid)
 
@@ -567,7 +602,7 @@ def process_txt(
                     continue
                 phrase_freq[t][p] = phrase_freq[t].get(p, 0) + 1
                 phrase_docs[t].setdefault(p, set()).add(docid)
-                group_key = (source_group, t, "phrase", p)
+                group_key = (group_label, t, "phrase", p)
                 group_freq[group_key]["Frequency"] += 1
                 group_docs[group_key].add(docid)
 
@@ -723,13 +758,14 @@ def process_txt(
         })
 
     group_rows = []
-    for (source, target, kind, expression), counter in sorted(group_freq.items()):
+    for (label, target, kind, expression), counter in sorted(group_freq.items()):
         f = counter["Frequency"]
         group_rows.append({
             "Corpus_ID": corpus_id,
             "Run_ID": run_id,
-            "Document_IDs": stable_doc_ids(group_docs.get((source, target, kind, expression), set())),
-            "Source_Group": source,
+            "Document_IDs": stable_doc_ids(group_docs.get((label, target, kind, expression), set())),
+            "Source_Group": label,
+            "Group_By": group_by,
             "Target": target,
             "Kind": kind,
             "Expression": expression,
@@ -788,7 +824,9 @@ def process_txt(
         "MI_Threshold": cfg.mi_threshold,
         "Phrase_Max_Tokens": cfg.phrase_max_tokens,
         "SpaCy_BatchSize": cfg.nlp_batch_size,
-        "Max_Doc_Chars": cfg.max_doc_chars
+        "Max_Doc_Chars": cfg.max_doc_chars,
+        "Group_By": group_by,
+        "Group_Map_Size": len(group_map) if group_map else 0,
     }])
     output_sheets = {
         "Adjectives": df_adj,
@@ -825,7 +863,11 @@ def process_txt(
             "LL_Significance": "Significance stars: *** p<.001, ** p<.01, * p<.05, ns = not significant.",
             "Polarity_Candidate": "Seed-lexicon candidate label (positive/negative/mixed/uncoded_candidate); not a final interpretation.",
             "Semantic_Domain": "Seed-lexicon domain hint or 'requires KWIC review'.",
-            "Source_Group": "Source metadata parsed from Lexis TXT headers when available.",
+            "Source": "Raw source metadata parsed from the corpus TXT headers.",
+            "Source_Normalized": "Normalized outlet label injected from the document registry when available.",
+            "Group": "Grouping label for this document under the configured group_by mode.",
+            "Source_Group": "Grouping label aggregated in this comparison row (per the Group_By mode).",
+            "Group_By": "Grouping variable used for the GroupComparison sheet: source, institution, country, or custom.",
             "Frequency": "Number of observed occurrences.",
             "Doc_Frequency": "Number of documents in which the candidate appears.",
             "GPT_Verdict": "LLM filter judgment: kept or removed.",

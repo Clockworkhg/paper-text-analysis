@@ -98,6 +98,23 @@ def update_latest_from_paths(project: Dict[str, Any], paths: Dict[str, str]) -> 
             project["latest"][key] = paths[key]
 
 
+def _kwic_hit_total(root: Path) -> int:
+    """Count KWIC rows in the analysis workbook; 0 when it is absent/unreadable.
+
+    The document registry is rebuilt on import and can legitimately report
+    zero target hits after the targets change, so the analysis workbook is
+    the authoritative source for hit totals once an analysis exists.
+    """
+    path = root / "adjectives_phrases.xlsx"
+    if not path.exists():
+        return 0
+    try:
+        df = pd.read_excel(path, sheet_name="KWIC", usecols=["Target"])
+        return int(len(df))
+    except Exception:
+        return 0
+
+
 def project_import(
     project_dir: str | Path,
     *,
@@ -161,7 +178,10 @@ def project_analyze(
     pos_translate: bool = False,
     force: bool = False,
     mi_threshold: float = 3.0,
+    group_by: str = "source",
 ) -> Dict[str, str]:
+    from shared.pipeline_steps import normalize_group_by
+
     project = load_project(project_dir)
     root = Path(project["project_dir"])
     corpus_type = normalize_template_name(corpus_type or project.get("corpus_type", "generic"))
@@ -169,6 +189,7 @@ def project_analyze(
     corpus = Path(corpus_dir) if corpus_dir else root / "corpus"
     if not corpus.exists():
         raise FileNotFoundError(f"Corpus directory does not exist: {corpus}")
+    group_by = normalize_group_by(group_by)
 
     run_args = Namespace(
         input=str(corpus),
@@ -179,6 +200,7 @@ def project_analyze(
         force=force,
         skip="",
         only="4,5" if pos_translate else "4",
+        group_by=group_by,
     )
     steps = [4, 5] if pos_translate else [4]
     run_config = build_run_config(run_args, steps, steps)
@@ -194,13 +216,27 @@ def project_analyze(
         corpus_dir=corpus,
     )
 
+    # The rebuild above regenerates the registry from the TXT corpus and
+    # drops any previously joined country column; re-apply it so the
+    # country grouping mode sees up-to-date labels.
+    from shared.corpus_model import apply_country_to_registry
+    country_state = apply_country_to_registry(root)
+    if country_state.get("updated"):
+        _safe_console_print(
+            f"国别已回写登记表: {country_state['matched']}/{country_state['documents']} 篇匹配"
+            f"（未匹配 {country_state['unknown']} 篇 → Unknown）"
+        )
+
     state: Dict[str, Any] = {"corpus_model": model}
 
     def _log(msg: str) -> None:
         _safe_console_print(msg)
 
-    state["s4"] = s4_extract_adjectives(str(corpus), str(root), targets, log_fn=_log, mi_threshold=mi_threshold)
-    outputs = {"analysis_output": state["s4"]["adj_excel_path"], **model}
+    state["s4"] = s4_extract_adjectives(
+        str(corpus), str(root), targets, log_fn=_log,
+        mi_threshold=mi_threshold, group_by=group_by,
+    )
+    outputs = {"analysis_output": state["s4"]["adj_excel_path"], "group_by": group_by, **model}
     if pos_translate:
         state["s5"] = s5_pos_and_translate(state["s4"]["adj_excel_path"], str(root), log_fn=_log)
         outputs["pos_translation_output"] = state["s5"]["final_excel_path"]
@@ -213,10 +249,16 @@ def project_analyze(
 
     project["targets"] = targets
     project["corpus_type"] = corpus_type
+    project["group_by"] = group_by
     update_latest_from_paths(project, model)
     project["latest"]["analysis_output"] = outputs["analysis_output"]
+    project["latest"]["group_by"] = group_by
+    project["latest"]["target_hits_total"] = _kwic_hit_total(root)
     project["latest"]["validation_report"] = outputs.get("validation_report", "")
-    project["history"].append({"event": "analyze", "at": now_iso(), "targets": targets, "outputs": outputs})
+    project["history"].append({
+        "event": "analyze", "at": now_iso(), "targets": targets,
+        "group_by": group_by, "outputs": outputs,
+    })
     save_project(root, project)
     return outputs
 
@@ -235,6 +277,21 @@ def project_review(project_dir: str | Path, *, sample_size: int = 50,
     return paths
 
 
+def project_groups(project_dir: str | Path) -> Dict[str, Any]:
+    """Generate the editable custom grouping template (01_corpus/group_overrides.xlsx)."""
+    from shared.corpus_model import write_group_template
+
+    project = load_project(project_dir)
+    root = Path(project["project_dir"])
+    result = write_group_template(root)
+    project["latest"]["group_overrides"] = result.get("group_template", "")
+    project["history"].append({"event": "groups", "at": now_iso(),
+                               "sources": result.get("sources", 0),
+                               "paths": result})
+    save_project(root, project)
+    return result
+
+
 def project_run(
     project_dir: str | Path,
     *,
@@ -249,6 +306,7 @@ def project_run(
     group_col: str = "",
     pos_translate: bool = False,
     mi_threshold: float = 3.0,
+    group_by: str = "source",
 ) -> Dict[str, Dict[str, str]]:
     imported = project_import(
         project_dir,
@@ -268,6 +326,7 @@ def project_run(
         corpus_type=corpus_type,
         pos_translate=pos_translate,
         mi_threshold=mi_threshold,
+        group_by=group_by,
     )
     return {"import": imported, "analyze": analyzed}
 
@@ -291,6 +350,10 @@ def project_status(project_dir: str | Path) -> Dict[str, Any]:
                 target_hits = int(pd.to_numeric(docs["target_hits_total"], errors="coerce").fillna(0).sum())
         except Exception:
             documents = 0
+    if analysis_path.exists() and target_hits <= 0:
+        # The registry can be rebuilt (e.g. by a later import) with different
+        # targets; the analysis workbook remains the hit-count authority.
+        target_hits = _kwic_hit_total(root)
 
     next_step = "import"
     if documents and not analysis_path.exists():
@@ -306,6 +369,7 @@ def project_status(project_dir: str | Path) -> Dict[str, Any]:
         "project_dir": str(root),
         "corpus_type": project.get("corpus_type", "generic"),
         "targets": project.get("targets", ""),
+        "group_by": project.get("group_by", "source"),
         "documents": documents,
         "target_hits_total": target_hits,
         "has_corpus_manifest": manifest_path.exists(),

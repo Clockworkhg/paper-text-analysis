@@ -32,3 +32,9 @@ class TxtAnalysisConfig:
     adj_min_freq: int = 2
     mi_threshold: float = 3.0
     ll_significance_level: float = 0.05
+    # Grouping variable for the GroupComparison sheet:
+    #   source      - raw <SOURCE:> header parsed from each corpus TXT
+    #   institution - normalized outlet label (<SOURCE_NORM:> header / registry)
+    #   country     - per-source country label resolved via group_map
+    #   custom      - user-editable mapping table resolved via group_map
+    group_by: str = "source"

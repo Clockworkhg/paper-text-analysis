@@ -15,6 +15,7 @@ from shared.exceptions import (
 from shared.pipeline_steps import (
     STEPS,
     check_step_done,
+    normalize_group_by,
     s4_extract_adjectives,
 )
 from shared.cli_pipeline import parse_step_selection, runnable_steps
@@ -97,7 +98,7 @@ def test_s4_injects_stable_ids_from_document_registry(tmp_path: Path, monkeypatc
 
     captured = {}
 
-    def fake_process_txt(input_path, output_path, targets, cfg, log_cb=None):
+    def fake_process_txt(input_path, output_path, targets, cfg, log_cb=None, group_map=None):
         captured["merged"] = Path(input_path).read_text(encoding="utf-8")
         pd.DataFrame({"ok": [1]}).to_excel(output_path, index=False)
 
@@ -112,3 +113,104 @@ def test_s4_injects_stable_ids_from_document_registry(tmp_path: Path, monkeypatc
     assert "<DOCUMENT_ID>: doc_123" in captured["merged"]
     assert "<CORPUS_ID>: corpus_abc" in captured["merged"]
     assert "<RUN_ID>: run_xyz" in captured["merged"]
+
+
+def _make_s4_project(tmp_path: Path, registry_extra: dict):
+    corpus = tmp_path / "corpus" / "BBC"
+    corpus.mkdir(parents=True)
+    (corpus / "story.txt").write_text(
+        "<TITLE>: Story\n<SOURCE>: BBC\n\n----- BODY -----\n\nChina is stable.",
+        encoding="utf-8",
+    )
+    model_dir = tmp_path / "01_corpus"
+    model_dir.mkdir()
+    row = {
+        "relative_path": ["BBC/story.txt"],
+        "document_id": ["doc_123"],
+        "source_normalized": ["BBC"],
+    }
+    row.update(registry_extra)
+    pd.DataFrame(row).to_csv(model_dir / "documents.csv", index=False, encoding="utf-8-sig")
+
+
+def test_s4_injects_source_norm_and_records_institution_mode(tmp_path: Path, monkeypatch):
+    _make_s4_project(tmp_path, {})
+    captured = {}
+
+    def fake_process_txt(input_path, output_path, targets, cfg, log_cb=None, group_map=None):
+        captured["merged"] = Path(input_path).read_text(encoding="utf-8")
+        captured["group_by"] = cfg.group_by
+        captured["group_map"] = group_map
+        pd.DataFrame({"ok": [1]}).to_excel(output_path, index=False)
+
+    monkeypatch.setitem(sys.modules, "modules.txt_modifier_extractor_gui", types.SimpleNamespace(
+        process_txt=fake_process_txt,
+        split_targets=lambda text: [part.strip() for part in text.split(";") if part.strip()],
+    ))
+
+    result = s4_extract_adjectives(str(tmp_path / "corpus"), str(tmp_path), "China", group_by="institution")
+
+    assert "<SOURCE_NORM>: BBC" in captured["merged"]
+    assert captured["group_by"] == "institution"
+    assert captured["group_map"] is None
+    assert result["group_by"] == "institution"
+
+
+def test_s4_country_mode_builds_group_map_from_registry(tmp_path: Path, monkeypatch):
+    _make_s4_project(tmp_path, {"country": ["United Kingdom"]})
+    captured = {}
+
+    def fake_process_txt(input_path, output_path, targets, cfg, log_cb=None, group_map=None):
+        captured["group_by"] = cfg.group_by
+        captured["group_map"] = group_map
+        pd.DataFrame({"ok": [1]}).to_excel(output_path, index=False)
+
+    monkeypatch.setitem(sys.modules, "modules.txt_modifier_extractor_gui", types.SimpleNamespace(
+        process_txt=fake_process_txt,
+        split_targets=lambda text: [part.strip() for part in text.split(";") if part.strip()],
+    ))
+
+    s4_extract_adjectives(str(tmp_path / "corpus"), str(tmp_path), "China", group_by="country")
+
+    assert captured["group_map"] == {"BBC": "United Kingdom", "doc_123": "United Kingdom"}
+
+
+def test_s4_custom_mode_without_overrides_falls_back_to_institution(tmp_path: Path, monkeypatch):
+    _make_s4_project(tmp_path, {})
+    captured = {}
+
+    def fake_process_txt(input_path, output_path, targets, cfg, log_cb=None, group_map=None):
+        captured["group_by"] = cfg.group_by
+        captured["group_map"] = group_map
+        pd.DataFrame({"ok": [1]}).to_excel(output_path, index=False)
+
+    monkeypatch.setitem(sys.modules, "modules.txt_modifier_extractor_gui", types.SimpleNamespace(
+        process_txt=fake_process_txt,
+        split_targets=lambda text: [part.strip() for part in text.split(";") if part.strip()],
+    ))
+
+    s4_extract_adjectives(str(tmp_path / "corpus"), str(tmp_path), "China", group_by="custom")
+
+    assert captured["group_by"] == "custom"
+    assert captured["group_map"] is None
+
+
+def test_normalize_group_by_rejects_unknown_modes():
+    assert normalize_group_by("institution") == "institution"
+    assert normalize_group_by("COUNTRY") == "country"
+    assert normalize_group_by("") == "source"
+    assert normalize_group_by("nonsense") == "source"
+
+
+def test_cli_group_by_defaults_and_choices():
+    from research_tool import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args(["analyze", "-o", "out", "-t", "China"])
+    assert args.group_by == "source"
+
+    args = parser.parse_args(["project", "analyze", "-p", "proj", "--group-by", "country"])
+    assert args.group_by == "country"
+
+    args = parser.parse_args(["run", "-i", "in.docx", "-o", "out", "--group-by", "institution"])
+    assert args.group_by == "institution"

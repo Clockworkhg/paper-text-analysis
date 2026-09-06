@@ -30,6 +30,13 @@ class TabProjectWorkbench(ToolTab):
         ("translation", "翻译语料分析"),
     ]
 
+    GROUPING_MODES = [
+        ("source", "原始来源表头"),
+        ("institution", "媒体机构 (规范来源)"),
+        ("country", "国别 (需先运行国别推断)"),
+        ("custom", "自定义映射 (立场等)"),
+    ]
+
     OUTPUT_FILES = [
         ("project.json", "项目状态"),
         ("01_corpus/document_registry.xlsx", "文档注册表"),
@@ -266,12 +273,21 @@ class TabProjectWorkbench(ToolTab):
         ttk.Label(mi_frame, text="(≥3.0 为显著搭配，语料库语言学标准)", foreground=COLORS["muted"],
                   font=("Microsoft YaHei UI", 8)).pack(side="left")
 
+        ttk.Label(self._step3, text="分组方式:").grid(row=4, column=0, sticky="e", padx=(0, 6), pady=2)
+        self._s3_group_var = tk.StringVar(value="source")
+        group_frame = ttk.Frame(self._step3)
+        group_frame.grid(row=4, column=1, sticky="w", pady=2)
+        ttk.Combobox(group_frame, textvariable=self._s3_group_var, state="readonly", width=26,
+                     values=[m[0] for m in self.GROUPING_MODES]).pack(side="left")
+        ttk.Label(group_frame, text="(对比表的分组变量)", foreground=COLORS["muted"],
+                  font=("Microsoft YaHei UI", 8)).pack(side="left", padx=(6, 0))
+
         self._s3_status = tk.Label(self._step3, text="", bg=COLORS["panel"], fg=COLORS["muted"],
                                    font=("Microsoft YaHei UI", 8), anchor="w")
-        self._s3_status.grid(row=4, column=1, sticky="w")
+        self._s3_status.grid(row=5, column=1, sticky="w")
 
         s3_btn_frame = ttk.Frame(self._step3)
-        s3_btn_frame.grid(row=4, column=1, sticky="e")
+        s3_btn_frame.grid(row=5, column=1, sticky="e")
         self._s3_btn = ttk.Button(s3_btn_frame, text="分析目标词", style="Accent.TButton",
                                   command=lambda: self._run_step("analyze"))
         self._s3_btn.pack(side="right")
@@ -519,6 +535,7 @@ class TabProjectWorkbench(ToolTab):
                     targets=self._s3_targets_var.get().strip() or None,
                     pos_translate=self._s3_pos_var.get(),
                     mi_threshold=self._s3_mi_var.get(),
+                    group_by=self._s3_group_var.get(),
                 )
                 self._w_put("done", "分析完成。")
             elif action == "review":
@@ -636,6 +653,11 @@ class TabProjectWorkbench(ToolTab):
             if targets and not self._s3_targets_var.get():
                 self._s3_targets_var.set(targets)
 
+            # Restore the saved grouping mode
+            valid_modes = [m[0] for m in self.GROUPING_MODES]
+            if s.get("group_by") in valid_modes:
+                self._s3_group_var.set(s["group_by"])
+
         else:
             self._s1_status.config(text="")
 
@@ -704,7 +726,7 @@ TOOL_DEFINITIONS = [
         "key": "project_workbench",
         "title": "项目工作台",
         "subtitle": "项目级研究流程: 初始化、导入、分析、复核、报告",
-        "params": ["project.json", "Corpus type", "Targets", "Sample size"],
+        "params": ["project.json", "Corpus type", "Targets", "分组方式", "Sample size"],
         "outputs": ["project.json", "adjectives_phrases.xlsx", "review artifacts", "research_report.md"],
         "group": "研究流程",
     },
@@ -712,7 +734,7 @@ TOOL_DEFINITIONS = [
         "key": "pipeline",
         "title": "全流程运行",
         "subtitle": "从 LexisNexis DOCX 到复核材料和方法报告",
-        "params": ["Lexis DOCX", "输出目录", "检索目标", "运行步骤", "国别推断"],
+        "params": ["Lexis DOCX", "输出目录", "检索目标", "运行步骤", "国别推断", "分组方式"],
         "outputs": ["corpus/*.txt", "source_counts.xlsx", "adjectives_phrases.xlsx", "06_review/", "07_reports/"],
         "group": "研究流程",
     },

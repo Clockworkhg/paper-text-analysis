@@ -24,6 +24,7 @@
 | `source_raw` | 从文本头部或导入源中解析的原始来源。 |
 | `source_normalized` | 规范化后的来源或分组标签。 |
 | `group_label` | 默认比较分组变量，可对应媒体、机构、学科、平台、说话人角色等。 |
+| `country` | 来源机构所属国家/地区，由步骤 3 的国别结果回流合并得到（精确→归一化→模糊匹配）；属于辅助变量，需人工复核。 |
 | `relative_path` | 文档在旧 `corpus/` 目录中的相对路径。 |
 | `word_count_approx` | 近似词数。 |
 | `target_hits_total` | 当前目标词列表的总命中数。 |
@@ -72,8 +73,8 @@
 | `KWIC` | 目标词左右上下文，用于人工语境化阅读。 |
 | `Collocates` | 目标词窗口内的内容词共现候选，含近似关联强度指标。 |
 | `SemanticProsodyCandidates` | 基于评价种子词的语义韵候选标签，必须人工复核。 |
-| `GroupComparison` | 按来源元数据分组的候选表达频次，用于后续媒体来源比较。 |
-| `Meta` | 输入文件、目标词和参数。 |
+| `GroupComparison` | 按可选分组变量（`Group_By`）聚合的候选表达频次，用于后续来源/国别/自定义维度比较。 |
+| `Meta` | 输入文件、目标词、分组方式和参数。 |
 
 常见字段：
 
@@ -97,7 +98,24 @@
 | `MI_Score_Approx` | 近似互信息分数，用于观察目标词和共现词关联强度。 |
 | `Log_Likelihood_Approx` | 近似 log-likelihood 分数，用于观察目标词和共现词关联强度。 |
 | `Polarity_Candidate` | 种子词表给出的积极/消极/混合/未编码候选标签，不是最终判断。 |
-| `Source_Group` | 从 Lexis TXT 头部 `<SOURCE>` 解析出的来源组。 |
+| `Source` | 从语料 TXT 头部 `<SOURCE>` 解析出的原始来源（可能为多机构拼接的原始字符串）。 |
+| `Source_Normalized` | 从文档登记表注入的规范化机构名（`<SOURCE_NORM>` 表头），与来源文件夹一致。 |
+| `Group` | 该文档在当前分组方式（`group_by`）下的分组标签。 |
+| `Source_Group` | GroupComparison 行的分组标签，含义由同表的 `Group_By` 决定。 |
+| `Group_By` | GroupComparison 使用的分组变量：`source`（原始表头）、`institution`（媒体机构）、`country`（国别）、`custom`（自定义映射）。 |
+
+### 分组方式（group_by）
+
+`GroupComparison` 的分组变量可通过 `--group-by` / GUI「分组方式」选择，并记录在 `run_config.json` 与 `Meta` 表中：
+
+| 模式 | 分组依据 | 数据来源 |
+|---|---|---|
+| `source`（默认） | 语料 TXT 头部原始 `<SOURCE>` 值 | 语料文件本身 |
+| `institution` | 规范化机构名（`source_normalized`） | `01_corpus/documents.csv` |
+| `country` | 来源机构国别（未匹配文档回退为机构分组） | 登记表 `country` 列（由 `merged_sources.xlsx` 回流，需人工复核） |
+| `custom` | 研究者自定义标签（如立场/倾向类别） | `01_corpus/group_overrides.xlsx`（`python research_tool.py project groups -p …` 生成模板，编辑 `group` 列） |
+
+研究用途：同一语料可在不同理论维度下重跑步骤 4 得到对应分组比较，每次运行的分组方式随 run 配置存档。
 
 研究用途：作为搭配、语义韵和评价资源分析的候选证据。所有高价值条目应回到上下文人工复核。
 
@@ -120,6 +138,7 @@
 | `output` | 输出目录绝对路径。 |
 | `targets` | 目标词设置。 |
 | `country_lookup_enabled` | 是否启用联网国别推断。 |
+| `group_by` | 本次运行的分组方式（source/institution/country/custom）。 |
 | `steps_requested` | 用户请求的步骤。 |
 | `steps_to_run` | 实际运行步骤。 |
 | `environment` | Python、依赖版本和 git commit。 |

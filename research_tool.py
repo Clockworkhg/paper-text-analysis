@@ -69,6 +69,7 @@ def cmd_analyze(args):
         corpus_dir=args.corpus_dir,
         pos_translate=args.pos_translate,
         force=args.force,
+        group_by=getattr(args, "group_by", "source"),
     )
     print(f"analysis_output: {outputs['analysis_output']}")
     return 0
@@ -148,6 +149,7 @@ def cmd_project(args):
     from shared.project_workflow import (
         init_project,
         project_analyze,
+        project_groups,
         project_import,
         project_review,
         project_report,
@@ -179,7 +181,10 @@ def cmd_project(args):
             pos_translate=args.pos_translate,
             force=args.force,
             mi_threshold=getattr(args, "mi_threshold", 3.0),
+            group_by=getattr(args, "group_by", "source"),
         )
+    elif args.project_command == "groups":
+        result = project_groups(args.project)
     elif args.project_command == "review":
         result = project_review(args.project, sample_size=args.sample_size,
                                 dual_coder=getattr(args, "dual_coder", False))
@@ -197,6 +202,7 @@ def cmd_project(args):
             group_col=args.group_col,
             pos_translate=args.pos_translate,
             mi_threshold=getattr(args, "mi_threshold", 3.0),
+            group_by=getattr(args, "group_by", "source"),
         )
     elif args.project_command == "status":
         result = project_status(args.project)
@@ -236,6 +242,8 @@ def build_parser():
     run.add_argument("--corpus-type", default="news_lexis", help="Corpus template/type for normalized metadata")
     run.add_argument("-t", "--targets", default="", help="Target terms separated by semicolons")
     run.add_argument("--no-country", action="store_true", help="Disable online country inference")
+    run.add_argument("--group-by", default="source", choices=("source", "institution", "country", "custom"),
+                     help="Grouping variable for the comparison sheet (default: source header)")
     run.add_argument("--skip", default="", help="Pipeline steps to skip, e.g. 3,4")
     run.add_argument("--only", default="", help="Pipeline steps to run, e.g. 1,2")
     run.add_argument("--force", action="store_true", help="Force rerun existing outputs")
@@ -267,6 +275,8 @@ def build_parser():
     analyze.add_argument("--corpus-type", default="generic", help="Corpus template/type for normalized metadata")
     analyze.add_argument("-t", "--targets", required=True, help="Target terms separated by semicolons")
     analyze.add_argument("--pos-translate", action="store_true", help="Also run POS/translation enrichment")
+    analyze.add_argument("--group-by", default="source", choices=("source", "institution", "country", "custom"),
+                         help="Grouping variable for the comparison sheet (default: source header)")
     analyze.add_argument("--force", action="store_true", help="Record force flag in run config")
     analyze.set_defaults(func=cmd_analyze)
 
@@ -322,6 +332,8 @@ def build_parser():
     p_analyze.add_argument("--corpus-dir", default="", help="Corpus directory; defaults to PROJECT/corpus")
     p_analyze.add_argument("--pos-translate", action="store_true", help="Also run POS/translation enrichment")
     p_analyze.add_argument("--mi-threshold", type=float, default=3.0, help="MI threshold for significant collocation (default 3.0)")
+    p_analyze.add_argument("--group-by", default="source", choices=("source", "institution", "country", "custom"),
+                           help="Grouping variable for the comparison sheet (default: source header)")
     p_analyze.add_argument("--force", action="store_true", help="Record force flag in run config")
     p_analyze.set_defaults(func=cmd_project)
 
@@ -344,7 +356,13 @@ def build_parser():
     p_run.add_argument("--group-col", default="", help="Optional grouping column for CSV/Excel imports")
     p_run.add_argument("--pos-translate", action="store_true", help="Also run POS/translation enrichment")
     p_run.add_argument("--mi-threshold", type=float, default=3.0, help="MI threshold for significant collocation (default 3.0)")
+    p_run.add_argument("--group-by", default="source", choices=("source", "institution", "country", "custom"),
+                       help="Grouping variable for the comparison sheet (default: source header)")
     p_run.set_defaults(func=cmd_project)
+
+    p_groups = project_sub.add_parser("groups", help="Generate the editable custom grouping template (group_overrides.xlsx)")
+    p_groups.add_argument("-p", "--project", required=True, help="Project directory")
+    p_groups.set_defaults(func=cmd_project)
 
     p_status = project_sub.add_parser("status", help="Show project status and suggested next step")
     p_status.add_argument("-p", "--project", required=True, help="Project directory")
