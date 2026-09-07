@@ -265,6 +265,15 @@ class SemanticReviewWorkbench(QWidget):
     # ------------------------------------------------------------------
     # rendering
 
+    def set_locked(self, locked: bool) -> None:
+        """Analysis-run lock: review writes are disabled while a run is active."""
+        for button in self._buttons.values():
+            button.setEnabled(not locked)
+        self._note.setEnabled(not locked)
+        if locked:
+            self._latest_label.setText("🔒 分析运行中,复核写入已锁定(候选集即将更新)。")
+            self._latest_label.setStyleSheet(f"color: {theme.WARNING}; font-weight: 600;")
+
     def refresh(self) -> None:
         progress = self.review.progress()
         self._progress_label.setText(f"{progress['coded']} / {progress['total']}")

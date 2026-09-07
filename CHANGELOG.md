@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.4.3-unreleased - gui-next Phase 2B: Analysis Execution
+
+### Added
+
+- Analysis execution layer (`gui_next/execution/`): runs the frozen shared
+  workflow in a subprocess against an isolated work copy
+  (`runs/work_<run_id>/`, project.json repointed at the copy), streams
+  JSON-line lifecycle events, and publishes outputs back to the project only
+  on success — FAILED/CANCELLED runs keep their work directory and can never
+  replace previous successful results.
+- New Analysis Run flow on the Analysis page: in-page configuration view
+  (targets, group_by, MI threshold, POS/translate, sanity gate — all mapped
+  1:1 to existing shared/CLI parameters; pipeline-fixed values shown
+  read-only), current-defaults vs new-parameters layout, and a full summary
+  before start.
+- Sanity gate enforced before every run (PASS run / UNKNOWN run sanity first /
+  WARNING proceed with summary / BLOCKED forbidden / STALE must re-run), with
+  a GUI sanity action and an Advanced `--skip-sanity` escape hatch (warning
+  attached, unavailable for UNKNOWN).
+- Run lifecycle states IDLE/PREPARING/RUNNING/CANCELLING/SUCCEEDED/FAILED/
+  CANCELLED (+INTERRUPTED after crash recovery) with a live run panel: stage,
+  step hint, elapsed time, latest log line, indeterminate progress, Cancel,
+  View log, Copy diagnostics.
+- Single analysis writer per project (writer lock + refusal), review-write
+  lock while a run is active, GUI run journal (`runs/gui_runs.json`) surfaced
+  in the Runs page, and crash recovery that marks dead-session runs
+  INTERRUPTED while preserving their work directory and logs.
+
+### Fixed
+
+- Corpus health now normalizes nested sanity reports (`corpus.failures`) —
+  previously a BLOCKED report could be misread as PASS.
+
+## 0.4.2-unreleased - gui-next Phase 2A.1: Review State Integrity
 ## 0.4.2-unreleased - gui-next Phase 2A.1: Review State Integrity
 
 ### Added

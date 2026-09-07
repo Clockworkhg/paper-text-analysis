@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QProgressBar,
+    QPushButton,
     QTabWidget,
     QTableView,
     QVBoxLayout,
@@ -308,7 +309,9 @@ class CorpusPage(QWidget):
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
-        report = self.store.sanity_report
+        from gui_next.data.health import extract_corpus_report
+
+        report = extract_corpus_report(self.store.sanity_report) if self.store.sanity_report else {}
         state = self.health[0] if self.health else HealthState.UNKNOWN
         detail = self.health[1] if self.health else "未评估"
         heading = QLabel(f"Corpus health: {state.value}")
@@ -356,23 +359,39 @@ class AnalysisPage(QWidget):
 
     METHOD_NOTE = "ⓘ MI / G² 用于发现和排序候选模式,不自动构成话语解释结论。"
 
-    def __init__(self, store: ProjectStore, inspector, parent=None):
+    def __init__(self, store: ProjectStore, inspector, *, health=None, parent=None):
         super().__init__(parent)
         self.setObjectName("Page")
         self.store = store
         self.inspector = inspector
+        self.health = health
         self._collocate_filter = ""
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 24, 24, 24)
         root.setSpacing(12)
+
+        header = QHBoxLayout()
         title = QLabel("分析")
         title.setObjectName("PageTitle")
-        root.addWidget(title)
+        header.addWidget(title)
+        header.addStretch(1)
+        self._new_run_button = QPushButton("＋ New Analysis Run")
+        self._new_run_button.setObjectName("Primary")
+        header.addWidget(self._new_run_button)
+        root.addLayout(header)
 
+        # Stacked: normal analysis view (0) / New Analysis Run config (1)
+        from PySide6.QtWidgets import QStackedWidget
+        self._view_stack = QStackedWidget()
+        root.addWidget(self._view_stack, 1)
+
+        normal = QWidget()
+        normal_v = QVBoxLayout(normal)
+        normal_v.setContentsMargins(0, 0, 0, 0)
+        normal_v.setSpacing(12)
         body = QHBoxLayout()
         body.setSpacing(12)
-        root.addLayout(body, 1)
 
         # Left: target terms with hit counts
         targets_card, targets_layout = _card("目标词")
@@ -417,13 +436,39 @@ class AnalysisPage(QWidget):
 
         note = QLabel(self.METHOD_NOTE)
         note.setStyleSheet(f"color: {theme.MUTED}; background: transparent;")
-        root.addWidget(note)
+        body.addWidget(targets_card, 0)
+        body.addWidget(self.tabs, 1)
+        normal_v.addLayout(body)
+        normal_v.addWidget(note)
+        self._view_stack.addWidget(normal)
+
+        # Run lifecycle panel (Phase 2B)
+        from gui_next.analysis_run import RunPanel
+        self.run_panel = RunPanel()
+        self.run_panel.setVisible(False)
+        self._view_stack.addWidget(self.run_panel)
+
+        # New Analysis Run config view (Phase 2B)
+        from gui_next.analysis_run import RunConfigView
+        self._run_config_view = RunConfigView(store, health)
+        self._view_stack.addWidget(self._run_config_view)
+
+        self._new_run_button.clicked.connect(self._show_run_config)
 
         self._current_target = ""
         if store.targets:
             self._target_list.setCurrentRow(0)
             self._target_list.currentRowChanged.connect(self._on_target_changed)
             self._on_target_changed(0)
+
+    def _show_run_config(self) -> None:
+        self._view_stack.setCurrentWidget(self._run_config_view)
+
+    def show_run_panel(self) -> None:
+        self._view_stack.setCurrentWidget(self.run_panel)
+
+    def show_normal_view(self) -> None:
+        self._view_stack.setCurrentIndex(0)
 
     def _setup_table(self, view: QTableView, model: DataFrameModel) -> None:
         view.setModel(model)
@@ -495,13 +540,15 @@ class AnalysisPage(QWidget):
 # ======================================================================
 
 class RunsPage(QWidget):
-    """Research audit center: frozen runs and their manifests."""
+    """Research audit center: GUI analysis runs + frozen runs + manifests."""
 
     def __init__(self, store: ProjectStore, inspector, parent=None):
         super().__init__(parent)
         self.setObjectName("Page")
         self.store = store
         self.inspector = inspector
+
+        from gui_next.execution.jobs import load_journal
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 24, 24, 24)
@@ -510,26 +557,55 @@ class RunsPage(QWidget):
         title.setObjectName("PageTitle")
         root.addWidget(title)
 
-        rows = store.runs_index()
-        df = pd.DataFrame([
-            {
-                "运行": row["run_id"],
-                "标签": row["label"],
-                "状态": "🔒 frozen" if row["frozen"] else "current",
-                "时间": row["at"],
-                "文件数": row["files"],
-            }
-            for row in rows
-        ])
+        status_labels = {
+            "SUCCEEDED": "✓ success", "FAILED": "✕ failed", "CANCELLED": "○ cancelled",
+            "INTERRUPTED": "⚠ interrupted", "RUNNING": "● running",
+            "PREPARING": "● preparing", "CANCELLING": "● cancelling",
+        }
+        rows = []
+        for entry in load_journal(store.root):
+            rows.append({
+                "run_id": entry.get("run_id", ""),
+                "kind": "analysis" if entry.get("kind") == "analyze" else entry.get("kind", ""),
+                "status": status_labels.get(entry.get("status"), entry.get("status", "")),
+                "started": entry.get("started_at", ""),
+                "finished": entry.get("finished_at", ""),
+                "group_by": (entry.get("params") or {}).get("group_by", ""),
+                "targets": len((entry.get("params") or {}).get("targets", "").split(";")) if (entry.get("params") or {}).get("targets") else 0,
+                "corpus_fp": (entry.get("corpus_fingerprint", "") or "")[:10],
+                "output": "work+published" if entry.get("status") == "SUCCEEDED" else
+                          ("work dir kept" if entry.get("work_dir") else "–"),
+                "note": entry.get("note", ""),
+            })
+        for row in store.runs_index():
+            rows.append({
+                "run_id": row["run_id"],
+                "kind": "frozen",
+                "status": "🔒 frozen" if row["frozen"] else "current",
+                "started": row["at"],
+                "finished": "",
+                "group_by": "",
+                "targets": 0,
+                "corpus_fp": "",
+                "output": "runs/<run_id>" if row["frozen"] else "project root",
+                "note": row.get("label", ""),
+            })
+        df = pd.DataFrame(rows)
         self._table_view = _table(df)
         self._table_view.doubleClicked.connect(self._on_select)
         root.addWidget(self._table_view, 1)
-        root.addWidget(_muted("双击查看 Research Run Manifest(参数、语料指纹、模型/规则/算法版本、文件哈希)。"))
+        root.addWidget(_muted(
+            "双击冻结运行查看 Research Run Manifest;GUI 运行的 success/failed/cancelled/"
+            "interrupted 状态、参数与输出可用性直接在表中显示。"))
         self._rows = rows
 
     def _on_select(self, index) -> None:
         row = self._rows[index.row()]
-        if row["frozen"]:
+        if row["kind"] == "frozen":
             self.inspector.show_run(self.store.run_manifest(row["run_id"]), row["run_id"])
+        elif row["kind"] == "analysis":
+            self.inspector.show_empty(
+                f"GUI 运行 {row['run_id']}\n状态:{row['status']}\n"
+                f"输出:{row['output']}\n{row['note']}")
         else:
             self.inspector.show_empty("当前运行尚未固化;project freeze 后此处显示 manifest。")

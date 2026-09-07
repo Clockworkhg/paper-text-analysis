@@ -34,6 +34,9 @@ from gui_next import theme
 from gui_next.data.health import corpus_health
 from gui_next.data.review_store import SemanticReviewStore, SourceCountryReviewStore
 from gui_next.data.store import ProjectStore
+from gui_next.execution import jobs as run_jobs
+from gui_next.execution.controller import AnalysisController
+from gui_next.execution.events import RunState
 from gui_next.inspector import InspectorPanel
 from gui_next.pages import AnalysisPage, CorpusPage, OverviewPage, RunsPage
 from gui_next.review_workbench import SemanticReviewWorkbench
@@ -71,6 +74,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("CADS Workbench")
         self.resize(1440, 900)
         self.store: Optional[ProjectStore] = None
+        self.controller: Optional[AnalysisController] = None
         self._pages: Dict[str, QWidget] = {}
 
         root = QWidget()
@@ -151,7 +155,12 @@ class MainWindow(QMainWindow):
             return
         self.store = store
 
-        # Review stores (the only write-enabled components in gui-next).
+        # Crash recovery: runs stuck active from a dead session -> INTERRUPTED.
+        recovered = run_jobs.recover_interrupted_runs(store.root)
+        for entry in recovered:
+            self._log_status(f"上次会话的运行 {entry.get('run_id', '')} 未完成,已标记为 INTERRUPTED(现场保留)。")
+
+        # Review stores (the only review-write components in gui-next).
         source_review = SourceCountryReviewStore(store.root, documents_df=store.documents_df)
         semantic_review = SemanticReviewStore(
             store.root, kwic_df=store.kwic_df, documents_df=store.documents_df,
@@ -177,7 +186,7 @@ class MainWindow(QMainWindow):
             "语料": CorpusPage(
                 store, self.inspector, source_store=source_review, health=health,
             ),
-            "分析": AnalysisPage(store, self.inspector),
+            "分析": AnalysisPage(store, self.inspector, health=health),
             "复核": SemanticReviewWorkbench(semantic_review, self.inspector),
             "运行记录": RunsPage(store, self.inspector),
         }
@@ -185,11 +194,123 @@ class MainWindow(QMainWindow):
             self._stack.addWidget(self._pages[key])
         self.inspector.show_empty()
         self._nav.setCurrentRow(0)
+        self.project_dir = str(store.root)
+
+        # Analysis execution controller (Phase 2B). Never recreate while a run
+        # is active — the running subprocess belongs to this window.
+        if self.controller is not None and self.controller.state in (
+                RunState.PREPARING, RunState.RUNNING, RunState.CANCELLING):
+            self._wire_run_panel()
+            self.statusBar().showMessage(
+                f"{store.name} · 分析运行中({self.controller.run_id})")
+            return
+        if self.controller is not None:
+            self.controller.deleteLater()
+        self.controller = AnalysisController(store.root)
+        self.controller.state_changed.connect(self._on_run_state)
+        self.controller.log_line.connect(self._on_run_log)
+        self.controller.finished.connect(self._on_run_finished)
+        self._wire_run_panel()
 
         self.statusBar().showMessage(
             f"{store.name} · {len(store.documents_df)} documents · run #{store.run_id[-6:] or '–'}"
             f" · corpus health {health[0].value}"
         )
+
+    def _wire_run_panel(self) -> None:
+        page = self._pages.get("分析")
+        if page is None or self.controller is None:
+            return
+        page.run_panel.cancel_requested.connect(self.controller.cancel)
+        page._run_config_view.start_requested.connect(self._start_analysis)
+        page._run_config_view.sanity_requested.connect(self._start_sanity)
+
+    # ------------------------------------------------------------------
+    # analysis execution (Phase 2B)
+
+    def _log_status(self, message: str) -> None:
+        if hasattr(self, "statusBar"):
+            try:
+                self.statusBar().showMessage(message)
+            except RuntimeError:
+                pass
+
+    def _review_pages(self):
+        workbench = self._pages.get("复核")
+        corpus = self._pages.get("语料")
+        return workbench, getattr(corpus, "source_panel", None)
+
+    def _set_review_lock(self, locked: bool) -> None:
+        workbench, panel = self._review_pages()
+        if workbench is not None:
+            workbench.set_locked(locked)
+        if panel is not None:
+            panel.set_locked(locked)
+
+    def _start_analysis(self, params: dict) -> None:
+        if self.controller is None or self.store is None:
+            return
+        writer = self.controller.analysis_writer_active()
+        if writer:
+            self.inspector.show_empty(
+                "该项目已有正在运行的分析任务(另一实例或窗口),已拒绝启动新的分析。\n"
+                f"writer: {writer.get('run_id', '?')}")
+            return
+        run_id = "gui_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        spec = jobs.build_spec(kind="analyze", project_dir=str(self.root), **params)
+        if self.controller.start(spec, run_id):
+            page = self._pages["分析"]
+            summary = (f"targets: {params.get('targets', '')} · group_by: {params.get('group_by')} · "
+                       f"MI: {params.get('mi_threshold')} · sanity: {'on' if params.get('sanity') else 'SKIPPED'}")
+            page.run_panel.set_run(run_id, summary, str(self.root / "runs" / f"work_{run_id}"))
+            page.run_panel.begin_elapsed()
+            page.show_run_panel()
+
+    def _start_sanity(self) -> None:
+        if self.controller is None or self.controller.state in (
+                RunState.PREPARING, RunState.RUNNING, RunState.CANCELLING):
+            return
+        run_id = "san_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        spec = jobs.build_spec(kind="sanity", project_dir=str(self.root))
+        if self.controller.start(spec, run_id):
+            page = self._pages["分析"]
+            page.run_panel.set_run(run_id, "corpus sanity check", "")
+            page.run_panel.begin_elapsed()
+            page.show_run_panel()
+
+    def _on_run_state(self, state_value: str, message: str) -> None:
+        state = RunState(state_value)
+        page = self._pages.get("分析")
+        if page is not None:
+            page.run_panel.set_state(state_value, message)
+        active = state in (RunState.PREPARING, RunState.RUNNING, RunState.CANCELLING)
+        self._set_review_lock(active)
+
+    def _on_run_log(self, line: str) -> None:
+        page = self._pages.get("分析")
+        if page is not None:
+            page.run_panel.append_log(line)
+
+    def _on_run_finished(self, state_value: str) -> None:
+        self._set_review_lock(False)
+        if state_value == RunState.SUCCEEDED.value and self.project_dir:
+            # Refresh Analysis/Overview/Runs against the published outputs.
+            # Corpus Health keeps its factual state (recomputed on reload).
+            self.open_project(self.project_dir)
+            self._log_status("分析完成:Analysis/Overview/Runs 已刷新。")
+        elif state_value == RunState.FAILED.value:
+            page = self._pages.get("分析")
+            controller = self.controller
+            if page is not None and controller is not None and controller.last_error:
+                page.run_panel.error_detail = (
+                    f"failed step/stage: {controller.state.value}\n"
+                    f"exception: {controller.last_error.get('type', '')}\n"
+                    f"message: {controller.last_error.get('message', '')}\n"
+                    f"work dir: {controller.work_dir}\n"
+                    f"params: {controller.params}\n\n"
+                    f"traceback (tail):\n{controller.last_error.get('traceback_tail', '')}"
+                )
+            self._log_status("分析失败:详情见 分析 页(Copy diagnostics / View log)。")
 
     def _navigate(self, key: str) -> None:
         if key in self._pages:

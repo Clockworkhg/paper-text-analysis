@@ -138,6 +138,17 @@ class SourceReviewPanel(QWidget):
 
     # ------------------------------------------------------------------
 
+    def set_locked(self, locked: bool) -> None:
+        """Analysis-run lock: review writes are disabled while a run is active."""
+        for button in self._buttons.values():
+            button.setEnabled(not locked)
+        self._country.setEnabled(not locked)
+        self._note.setEnabled(not locked)
+        if locked:
+            self._decision_label.setText("🔒 分析运行中,复核写入已锁定(来源表/候选集即将更新)。")
+            self._decision_label.setStyleSheet(
+                f"background: transparent; color: {theme.WARNING}; font-weight: 600;")
+
     def refresh(self) -> None:
         progress = self.review.progress()
         text = f"总数 {progress['total']} · 已复核 {progress['decided']} · 待复核 {progress['pending']}"

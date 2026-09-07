@@ -212,12 +212,16 @@ class BaseReviewStore:
         """Apply only fingerprint-verified decisions to the current items."""
         self.applied_decisions = {}
         self.stale_decision_ids = []
+        self.dormant_decision_ids = []
         if self.stale_reasons:
             return
         for item_id, record in self.state.get("decisions", {}).items():
             item = self.item_by_id(item_id)
             if item is None:
-                continue  # candidate removed from the set: dormant, kept
+                # Candidate removed from the set (or set replaced wholesale):
+                # kept on disk, never applied, and the state reads STALE.
+                self.dormant_decision_ids.append(item_id)
+                continue
             if record.get("item_fingerprint") == item.get("item_fingerprint"):
                 self.applied_decisions[item_id] = record
             else:

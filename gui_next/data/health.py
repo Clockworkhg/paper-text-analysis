@@ -59,6 +59,24 @@ def _corpus_changed_since(corpus_dir: Path, checked_at: Optional[datetime],
     return False
 
 
+def extract_corpus_report(report: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Normalize a sanity report to its corpus-check section.
+
+    Reports written by ``project_sanity`` / the GUI sanity job nest the
+    corpus check under ``corpus`` (with a sibling ``registry``); some older
+    flows wrote the corpus fields at the top level. All health consumers
+    must read through this helper so BLOCKED never degrades into PASS.
+    """
+    if not isinstance(report, dict):
+        return {}
+    corpus = report.get("corpus")
+    if isinstance(corpus, dict):
+        merged = dict(corpus)
+        merged.setdefault("checked_at", report.get("checked_at"))
+        return merged
+    return report
+
+
 def corpus_health(project_dir: str | Path, sanity_report: Optional[Dict[str, Any]],
                   corpus_fingerprint: Optional[Dict[str, Any]] = None) -> Tuple[HealthState, str]:
     """Classify corpus health.
@@ -76,7 +94,8 @@ def corpus_health(project_dir: str | Path, sanity_report: Optional[Dict[str, Any
     if not sanity_report:
         return HealthState.UNKNOWN, "尚未运行语料卫生检查(project sanity)"
 
-    failures = sanity_report.get("failures", {}) or {}
+    report = extract_corpus_report(sanity_report)
+    failures = report.get("failures", {}) or {}
     contaminated = (
         failures.get("marker_lines_in_body", {}).get("count", 0)
         + failures.get("header_tags_in_body", {}).get("count", 0)
@@ -85,17 +104,17 @@ def corpus_health(project_dir: str | Path, sanity_report: Optional[Dict[str, Any
         return HealthState.BLOCKED, f"{contaminated} 篇文档存在元数据标记污染,分析已被门禁阻止"
 
     # Freshness: compare against the corpus state the report described.
-    report_fp = sanity_report.get("corpus_fingerprint") or {}
+    report_fp = report.get("corpus_fingerprint") or sanity_report.get("corpus_fingerprint") or {}
     if report_fp.get("sha256"):
         current = corpus_fingerprint or {}
         if current and current.get("sha256") != report_fp.get("sha256"):
             return HealthState.STALE, "语料指纹与卫生检查结果不一致,检查结果已过期"
     else:
-        checked_at = _parse_iso(sanity_report.get("checked_at"))
-        if _corpus_changed_since(corpus_dir, checked_at, sanity_report.get("documents")):
+        checked_at = _parse_iso(report.get("checked_at"))
+        if _corpus_changed_since(corpus_dir, checked_at, report.get("documents")):
             return HealthState.STALE, "语料在卫生检查之后发生了变化,检查结果已过期"
 
-    warnings = sanity_report.get("warnings", {}) or {}
+    warnings = report.get("warnings", {}) or {}
     warning_hits = sum(
         1 for info in warnings.values()
         if info.get("count") or info.get("total") or info.get("groups")

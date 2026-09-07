@@ -99,13 +99,55 @@ corpus 变化 → STALE、良性重生成不失效、旧版 state 迁移、四�
 进度、调和/信度解耦、双实例冲突拒绝且原文件完整、Ctrl+Z 一致性、全部复核操作
 期间语料/分析/复核工作簿字节不变。
 
+## Phase 2B:Analysis Execution(分析运行)
+
+分析不重写 pipeline,而是由执行层(`gui_next/execution/`)安全调用现有 shared 工作流,
+并产品化为**可审计、可取消、不覆盖旧结果**的任务生命周期。
+
+### 执行架构
+
+- `events.py` 生命周期状态机:`IDLE → PREPARING → RUNNING → (CANCELLING →) SUCCEEDED / FAILED / CANCELLED`,崩溃恢复补充 `INTERRUPTED`;
+- `runner.py` 子进程入口(`python -m gui_next.execution.runner spec.json`):在**隔离工作副本** `runs/work_<run_id>/` 上调用 `project_analyze`(冻结 Python API),stdout 逐行输出 JSON 事件;sanity 任务直接组合 shared 只读检查函数、按传入目录执行;
+- `controller.py` QProcess 驱动(QObject,UI 线程零阻塞):复制工作副本 → 启动子进程 → 流式日志 → 成功后**发布**(仅分析产物拷回项目根;`06_review/*_state.json` 永不发布)→ 记录运行日志;
+- `jobs.py` 运行日志(`runs/gui_runs.json`)、写者锁、崩溃恢复、工作副本构建;
+- **工作副本重定向**:副本的 project.json `project_dir` 指向副本自身,保证 `project_analyze` 全部写入落在副本内;发布时改写回真实路径。
+
+### New Analysis Run
+
+分析页 "＋ New Analysis Run" → 页内配置视图(非直接启动):targets / group_by / MI 阈值 / POS+翻译(可选)/ sanity 门禁,全部来自现有 shared/CLI 能力;流水线固定值(窗口 8 tokens、短语 ≤6)只读展示;左列显示 Current project defaults,右列 New run parameters;启动前给出完整 summary。
+
+### Sanity 门禁
+
+| Health | 行为 |
+|---|---|
+| PASS | 允许运行 |
+| UNKNOWN | 禁止运行;GUI 内一键运行 sanity |
+| WARNING | 显示摘要,允许运行(与 shared 行为一致) |
+| BLOCKED | 禁止运行 |
+| STALE | 禁止运行,必须重新 sanity |
+
+Advanced 区提供 `--skip-sanity` 同级逃生口,固定警告"跳过卫生检查会降低研究结果可靠性,不建议用于正式研究";UNKNOWN 状态不提供该逃生口。
+
+### 隔离、取消与恢复
+
+- FAILED / CANCELLED:工作副本原地保留(现场不删),项目根既有成功结果**字节不变**;
+- Cancel:CANCELLING(诚实显示"正在等待当前步骤安全结束……")→ 子进程 terminate → 10s 后 force kill → CANCELLED;
+- 单写者:`runs/analysis_writer.lock`,第二个分析写任务被拒绝并给出提示;分析运行期间复核写入锁定(workbench/来源面板禁用编码按钮并显示 🔒 提示);
+- 崩溃恢复:启动时扫描 journal 中 active 但进程已死的运行 → 标记 INTERRUPTED("Previous application session ended before this run completed."),保留日志与工作目录;
+- 错误 UX:FAILED 显示阶段、异常类型、消息、日志(View log)、参数、工作目录与 Copy diagnostics;
+- Runs 页区分 success / failed / cancelled / interrupted / frozen,显示 run id、起止时间、group_by、targets 数、语料指纹、产物可用性。
+
+### Result freshness
+
+分析成功发布后自动刷新 Analysis/Overview/Runs;Corpus Health 保持事实状态;候选集因重生成而变化时,旧 Review state 经 2A.1 指纹机制自然进入 STALE(绝不手工删除)。复核绑定调和后 FINAL 工作簿时,分析不会使其失效(调和产物不受重生成影响)。
+
 ## 阶段规划
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | Phase 1 | Overview / Corpus / Analysis(KWIC)/ Review 只读 + Inspector + Runs | ✅ |
 | Phase 2A | **Human Review Workbench**:Source/Country 复核(证据面板 + Accept/Change/Uncertain/Exclude)、语义韵键盘编码工作台、Overview 状态拆分、语料健康状态机、写边界 `review_store.py` | ✅ |
-| Phase 2B | 分析运行接入、Evidence 面板细化(Wikidata/域名/规则分级) | 待做 |
+| Phase 2B | 分析运行接入(执行层/生命周期/隔离/取消/崩溃恢复) | ✅ |
 | Phase 3 | Evidence Trail(证据篮 → Claim→Pattern→KWIC→Document→Run 导出)、Run Compare、Report | 待做 |
 | 收尾 | 旧 Tkinter GUI 移除(CLI 永久保留) | 待做 |
 

@@ -278,11 +278,14 @@ class ProjectStore:
         return (self.root / "adjectives_phrases.xlsx").exists()
 
     def analysis_blocked_reason(self) -> str:
-        failures = self.sanity_report.get("failures", {}) if self.sanity_report else {}
+        from gui_next.data.health import extract_corpus_report
+
+        report = extract_corpus_report(self.sanity_report) if self.sanity_report else {}
+        failures = report.get("failures", {})
         marker = failures.get("marker_lines_in_body", {}).get("count", 0)
         tags = failures.get("header_tags_in_body", {}).get("count", 0)
         if marker or tags:
-            total = self.sanity_report.get("documents", "?")
+            total = report.get("documents", "?")
             return (
                 f"语料卫生检查未通过:{marker} 篇文档正文含分隔线标记,{tags} 篇含头部标签"
                 f"(共 {total} 篇)。请用原始 DOCX/干净正文重新导入。"
