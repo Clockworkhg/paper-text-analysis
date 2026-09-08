@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame,
+    QHBoxLayout,
     QLabel,
     QScrollArea,
     QVBoxLayout,
@@ -84,6 +85,43 @@ class InspectorPanel(QWidget):
         scroll.setWidget(self._body)
         outer.addWidget(scroll, 1)
 
+        # Optional action row (e.g. Add to Evidence / Open Run buttons set by
+        # pages via show_actions).
+        self._actions = QWidget()
+        self._actions_layout = QHBoxLayout(self._actions)
+        self._actions_layout.setContentsMargins(0, 4, 0, 0)
+        self._actions_layout.setSpacing(6)
+        outer.addWidget(self._actions)
+
+        self._badge = QLabel("")
+        self._badge.setStyleSheet("background: transparent;")
+        outer.addWidget(self._badge)
+
+    def set_badge(self, text: str, color: str = "") -> None:
+        """Small persistent status line (e.g. '✓ In Evidence')."""
+        self._badge.setText(text)
+        self._badge.setStyleSheet(
+            f"color: {color or theme.MUTED}; background: transparent; font-weight: 600;")
+
+    def show_actions(self, actions: list[tuple[str, object]]) -> None:
+        """Replace the action buttons under the detail blocks."""
+        while self._actions_layout.count():
+            item = self._actions_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        for label, handler in actions:
+            button = QLabel(f"<a href='#'>{label}</a>")
+            button.setStyleSheet(
+                f"color: {theme.PRIMARY}; background: transparent; font-weight: 600;")
+            button.linkActivated.connect(lambda _=None, h=handler: h())
+            self._actions_layout.addWidget(button)
+        self._actions.setVisible(bool(actions))
+
+    def clear_actions(self) -> None:
+        self.show_actions([])
+        self.set_badge("")
+
     def _clear_body(self) -> None:
         while self._body_layout.count():
             item = self._body_layout.takeAt(0)
@@ -92,6 +130,7 @@ class InspectorPanel(QWidget):
                 widget.deleteLater()
 
     def _set(self, kind: str, heading: str, blocks: List[QFrame], pairs: List[tuple[str, str]]) -> None:
+        self.clear_actions()
         self._title.setText(kind)
         self._heading.setText(heading)
         self._clear_body()
@@ -138,6 +177,7 @@ class InspectorPanel(QWidget):
             ("左语境", row.get("Left_Context")),
             ("右语境", row.get("Right_Context")),
         ]
+        self.clear_actions()
         self._clear_body()
         self._title.setText("KWIC")
         self._heading.setText(f"目标词:{row.get('Target', '')}")

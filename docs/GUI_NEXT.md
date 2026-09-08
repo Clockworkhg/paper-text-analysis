@@ -216,6 +216,67 @@ parity 测试对同一项目比对 document count / failure counts / ok 判定,�
   ④Phase 2B.1 起发布只允许契约内路径;⑤相关单元测试与真实项目副本 E2E
   覆盖上述每一条。
 
+## Phase 3A:Evidence Trail Core(研究论证链)
+
+CADS Workbench 从"可以分析和复核"升级为"可以建立可审计研究论证链"。核心链路:
+
+```
+Claim → Pattern → KWIC / Context → Document → Published Run
+    → Corpus / Parameters / Publication Manifest
+```
+
+任何证据只绑定**已 COMMITTED 的已发布代际**(`runs/published/<run_id>/`),绝不依赖
+"项目根当前最新文件";RUNNING/FAILED/CANCELLED/INTERRUPTED 等状态的结果可浏览诊断,
+但不得作为正式证据来源。
+
+### Evidence 数据模型(独立写边界)
+
+`gui_next/data/evidence_store.py` 是唯一 Evidence 写入口,数据存于
+`08_evidence/evidence.json`(schema v1、原子写入、乐观单写者冲突检测、溯源元数据)。
+EvidenceStore 不属于分析 owned outputs——**publication 永不覆盖或删除它**。
+
+EvidenceRecord:稳定 `evidence_id`(UUID)、evidence_type、published_run_id、
+publication_manifest_hash、corpus_fingerprint、parameters_hash、document_id、target、
+locator(行号仅辅助)、item_fingerprint、captured_snapshot(研究者当时看到的完整语境
+快照——第二层审计保障)、researcher_note、created_at/updated_at。
+
+支持的四种类型:KWIC(左语境/节点/右语境/来源/国别/分组)、COLLOCATE_PATTERN
+(target×collocate、频次、MI、G²、窗口——MI/G² 是模式证据,不自动构成统计证明)、
+PHRASE_PATTERN、GROUP_PATTERN(分组变量/组/观察值,不自动生成社会科学结论)。
+
+幂等去重:同一 `published_run_id + evidence_type + item_fingerprint` 只有一条记录;
+同一 Evidence 可被多个 Claim 引用而不复制。
+
+### Claim 语义
+
+ClaimRecord:title / claim_text / researcher_note / evidence_ids[] / 时间戳。Claim 是
+**研究者提出的研究论断**,GUI 只组织证据,不做 Supported/Proven/True 判定,不生成
+措辞。支持新建/编辑/删除/重排;同一 Evidence 服务多个 Claim;删除 Claim 不删除
+Evidence;删除被引用的 Evidence 会被拒绝并提示引用数。
+
+### 历史代际语义(与 Review STALE 的本质区别)
+
+发布 COMMITTED 时归档 `runs/published/<run_id>/`:publication_manifest.json +
+artifacts/(分析工作簿、登记表、语料清单、run_config、研究模板、方法报告——每个
+产物带 sha256)。发布 Run #015 后,来自 Run #014 的证据**仍然是
+VALID HISTORICAL EVIDENCE**(界面显示 Older published run),绝不自动失效或升级。
+只有三种情况标记异常:SOURCE_UNAVAILABLE(归档缺失)、INTEGRITY_ERROR(manifest
+哈希或产物哈希不匹配)、以及指纹不匹配;解析永远优先读取对应历史代际,**绝不静默
+回退到当前最新运行**。
+
+### 捕获与工作台
+
+- 分析页:`Add to Evidence`(按钮/E 键)作用于 Concordance、Collocates、Phrases、
+  Groups 四个表;Inspector 同步显示 `✓ In Evidence`;需要已发布代际,否则明确拒绝。
+- 证据页:左 Inbox/Claims 树,中证据表(类型/运行/自由文本过滤,Ctrl+F),右
+  Inspector(完整语境 + RUN PROVENANCE 块 + [Open Run] 双向导航)。
+- Claim workspace:按 STATISTICAL/PATTERN 与 QUALITATIVE/KWIC 分组展开;Pattern 类
+  证据可 View supporting KWIC——打开的是**该证据绑定代际**的 KWIC,选中后
+  "Add supporting KWIC"加入同一 Claim。
+- 最小导出:Export Claim Evidence Packet(Markdown,严格来自 EvidenceRecord,
+  审计/调试用途;正式报告导出属 Phase 3B)。
+- Runs 页显示每代际的"证据引用"数;Evidence → Run 双向可达。
+
 ## 阶段规划
 
 | 阶段 | 内容 | 状态 |
@@ -224,6 +285,7 @@ parity 测试对同一项目比对 document count / failure counts / ok 判定,�
 | Phase 2A | **Human Review Workbench**:Source/Country 复核(证据面板 + Accept/Change/Uncertain/Exclude)、语义韵键盘编码工作台、Overview 状态拆分、语料健康状态机、写边界 `review_store.py` | ✅ |
 | Phase 2B | 分析运行接入(执行层/生命周期/隔离/取消/崩溃恢复) | ✅ |
 | Phase 2B.1 | 事务化发布(manifest 契约/备份回滚/崩溃恢复/发布身份/sanity parity) | ✅ |
+| Phase 3A | Evidence Trail Core(证据捕获/Claim 工作台/历史代际解析/完整性校验) | ✅ |
 | Phase 3 | Evidence Trail(证据篮 → Claim→Pattern→KWIC→Document→Run 导出)、Run Compare、Report | 待做 |
 | 收尾 | 旧 Tkinter GUI 移除(CLI 永久保留) | 待做 |
 

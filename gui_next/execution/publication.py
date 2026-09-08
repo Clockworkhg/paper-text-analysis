@@ -350,6 +350,7 @@ def execute_publication(manifest: Dict[str, Any], work_dir: Path, project_dir: P
     record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     shutil.rmtree(tx_dir, ignore_errors=True)
     write_published_pointer(root, record)
+    archive_published_generation(root, record, progress_cb=progress_cb)
     merge_project_json(work_dir, root, progress_cb=progress_cb)
     report(STAGE_COMMITTED, f"已提交 {committed} 个文件")
     return record
@@ -511,3 +512,72 @@ def last_publication_record(project_dir: str | Path) -> Optional[Dict[str, Any]]
         if record.get("transaction", {}).get("state") == STAGE_COMMITTED:
             return record
     return None
+
+
+# ---------------------------------------------------------------------------
+# Published generation archive (Phase 3A: Evidence Trail source of truth)
+# ---------------------------------------------------------------------------
+
+# Evidence only needs the analysis outputs it can resolve — never the raw
+# corpus. Every archived artifact is hashed so INTEGRITY can be verified.
+ARCHIVE_ARTIFACTS = [
+    "adjectives_phrases.xlsx",
+    "adjectives_final.xlsx",
+    "01_corpus/documents.csv",
+    "01_corpus/corpus_manifest.json",
+    "run_config.json",
+    "00_run_config/research_template.json",
+    "07_reports/method_summary.md",
+    "07_reports/method_limitations.md",
+]
+
+
+def published_dir(project_dir: str | Path, run_id: str) -> Path:
+    return Path(project_dir) / "runs" / "published" / run_id
+
+
+def archive_published_generation(project_dir: str | Path, record: Dict[str, Any],
+                                 progress_cb: Optional[Callable[[str, str], None]] = None) -> Path:
+    """Archive the immutable artifact set of one published generation.
+
+    Layout: runs/published/<run_id>/publication_manifest.json + artifacts/<rel>.
+    Read-only by convention: the Evidence layer resolves historical evidence
+    here instead of the live project root.
+    """
+    root = Path(project_dir)
+    run_id = record.get("published_run_id", "")
+    gen_dir = published_dir(root, run_id)
+    if gen_dir.exists():
+        shutil.rmtree(gen_dir)  # re-publishing the same run id re-archives
+    artifacts = gen_dir / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+
+    archived: List[Dict[str, Any]] = []
+    for rel in ARCHIVE_ARTIFACTS:
+        src = root / rel
+        if not src.exists():
+            continue
+        dst = artifacts / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        archived.append({
+            "relative_path": rel,
+            "sha256": _sha256_file(dst),
+            "size": dst.stat().st_size,
+        })
+
+    manifest_doc = {
+        "archive_version": 1,
+        "published_run_id": run_id,
+        "publication_manifest_sha256": record.get("manifest_sha256", ""),
+        "corpus_fingerprint": record.get("corpus_fingerprint", ""),
+        "params_hash": record.get("params_hash", ""),
+        "completed_at": record.get("completed_at", ""),
+        "artifacts": archived,
+        "archived_at": _now(),
+    }
+    (gen_dir / "publication_manifest.json").write_text(
+        json.dumps(manifest_doc, ensure_ascii=False, indent=2), encoding="utf-8")
+    if progress_cb:
+        progress_cb("ARCHIVED", f"已归档 {len(archived)} 个正式产物到 runs/published/{run_id}")
+    return gen_dir

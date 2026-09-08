@@ -27,10 +27,21 @@ if str(REPO_ROOT) not in sys.path:
 from gui_next.execution import jobs
 from gui_next.execution.events import encode, error_event, log_event, result_event, stage_event  # noqa: E402
 
+spec_path: Path = Path("")
+
 
 def emit(event: dict) -> None:
-    sys.stdout.write(encode(event) + "\n")
+    line = encode(event)
+    sys.stdout.write(line + "\n")
     sys.stdout.flush()
+    # File-side trace: survives pipe/parent issues and makes hangs diagnosable.
+    try:
+        if spec_path.parent.name:
+            trace = spec_path.parent / "runner_trace.log"
+            with open(trace, "a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+    except Exception:
+        pass
 
 
 def run_sanity_job(spec: dict) -> dict:
@@ -92,6 +103,7 @@ def run_job(spec: dict) -> dict:
 
 
 def main(argv: list[str]) -> int:
+    global spec_path
     spec_path = Path(argv[0])
     spec = json.loads(spec_path.read_text(encoding="utf-8"))
     emit(stage_event("PREPARING", spec.get("kind", "analyze")))

@@ -31,9 +31,12 @@ from PySide6.QtWidgets import (
 )
 
 from gui_next import theme
+from gui_next.data.evidence_store import EvidenceStore
+from gui_next.data.generations import GenerationResolver
 from gui_next.data.health import corpus_health
 from gui_next.data.review_store import SemanticReviewStore, SourceCountryReviewStore
 from gui_next.data.store import ProjectStore
+from gui_next.evidence_page import EvidencePage
 from gui_next.execution import jobs as run_jobs
 from gui_next.execution.controller import AnalysisController
 from gui_next.execution.events import RunState
@@ -41,7 +44,7 @@ from gui_next.inspector import InspectorPanel
 from gui_next.pages import AnalysisPage, CorpusPage, OverviewPage, RunsPage
 from gui_next.review_workbench import SemanticReviewWorkbench
 
-NAV_ITEMS = ["概览", "语料", "分析", "复核", "运行记录"]
+NAV_ITEMS = ["概览", "语料", "分析", "复核", "证据", "运行记录"]
 
 
 class EmptyState(QWidget):
@@ -178,6 +181,11 @@ class MainWindow(QMainWindow):
             store.root, kwic_df=store.kwic_df, documents_df=store.documents_df,
         )
 
+        # Evidence Trail: independent write boundary + published-generation
+        # resolver (historical artifacts, never the live project root).
+        evidence_store = EvidenceStore(store.root)
+        resolver = GenerationResolver(store.root)
+
         # Corpus health state machine (read-only fingerprint computation).
         from shared.corpus_sanity import corpus_fingerprint as _fingerprint
         try:
@@ -198,9 +206,13 @@ class MainWindow(QMainWindow):
             "语料": CorpusPage(
                 store, self.inspector, source_store=source_review, health=health,
             ),
-            "分析": AnalysisPage(store, self.inspector, health=health),
+            "分析": AnalysisPage(store, self.inspector, health=health,
+                                 evidence_store=evidence_store),
             "复核": SemanticReviewWorkbench(semantic_review, self.inspector),
-            "运行记录": RunsPage(store, self.inspector),
+            "证据": EvidencePage(evidence_store, resolver,
+                                 lambda: self.store.published_analysis() if self.store else {},
+                                 self.inspector, self._navigate),
+            "运行记录": RunsPage(store, self.inspector, evidence_store=evidence_store),
         }
         for key in NAV_ITEMS:
             self._stack.addWidget(self._pages[key])

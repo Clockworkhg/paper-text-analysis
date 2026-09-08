@@ -60,6 +60,7 @@ class ProjectStore:
         self._docs: Optional[pd.DataFrame] = None
         self._kwic: Optional[pd.DataFrame] = None
         self._collocates: Optional[pd.DataFrame] = None
+        self._phrases: Optional[pd.DataFrame] = None
         self._adjectives: Optional[pd.DataFrame] = None
         self._group: Optional[pd.DataFrame] = None
         self._semantic: Optional[pd.DataFrame] = None
@@ -110,6 +111,12 @@ class ProjectStore:
         if self._kwic is None:
             self._kwic = self._sheet("KWIC")
         return self._kwic
+
+    @property
+    def phrases_df(self) -> pd.DataFrame:
+        if self._phrases is None:
+            self._phrases = self._sheet("Phrases")
+        return self._phrases
 
     @property
     def collocates_df(self) -> pd.DataFrame:

@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.0-unreleased - gui-next Phase 3A: Evidence Trail Core
+
+### Added
+
+- Published generation archives (`runs/published/<run_id>/`):
+  publication manifest + hashed evidence artifacts (analysis workbook,
+  registry, corpus manifest, run config, research template, method reports),
+  written at COMMITTED time and read-only thereafter.
+- Generation resolver (`gui_next/data/generations.py`): historical evidence
+  resolves against its own archived generation; missing or hash-mismatched
+  sources report SOURCE_UNAVAILABLE / INTEGRITY_ERROR — no silent fallback to
+  the latest run or project root.
+- Evidence store (`gui_next/data/evidence_store.py`, `08_evidence/
+  evidence.json`): independent write boundary with schema version, atomic
+  writes, optimistic conflict detection and provenance. EvidenceRecord binds
+  strictly to a COMMITTED published generation (run id + manifest hash +
+  corpus fingerprint + params hash) with a per-item fingerprint, captured
+  context snapshot, locator and researcher note. Idempotent capture on
+  run+type+fingerprint. Never touched by publication.
+- Claims: create/edit/delete/reorder, multi-claim evidence references,
+  remove-from-claim without deleting evidence, referenced-evidence delete
+  guard.
+- Evidence page: Inbox/Claims tree, evidence table with type/run/text
+  filters, Claim workspace grouped into statistical/pattern vs qualitative/
+  KWIC evidence, supporting-KWIC capture from pattern evidence against the
+  bound published run, integrity badges (VERIFIED / INTEGRITY_ERROR /
+  SOURCE_UNAVAILABLE), Evidence -> Run navigation, Run-page evidence
+  reference counts, and a minimal Markdown Claim Evidence Packet export.
+- Analysis page: Phrases tab; Add to Evidence button and E-key capture on
+  KWIC/Collocates/Phrases/Groups rows with "✓ In Evidence" badge.
+
+## 0.4.4-unreleased - gui-next Phase 2B.1: Transactional Publication Integrity
 ## 0.4.4-unreleased - gui-next Phase 2B.1: Transactional Publication Integrity
 
 ### Added

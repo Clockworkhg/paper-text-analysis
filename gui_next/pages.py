@@ -359,12 +359,14 @@ class AnalysisPage(QWidget):
 
     METHOD_NOTE = "ⓘ MI / G² 用于发现和排序候选模式,不自动构成话语解释结论。"
 
-    def __init__(self, store: ProjectStore, inspector, *, health=None, parent=None):
+    def __init__(self, store: ProjectStore, inspector, *, health=None,
+                 evidence_store=None, parent=None):
         super().__init__(parent)
         self.setObjectName("Page")
         self.store = store
         self.inspector = inspector
         self.health = health
+        self.evidence = evidence_store
         self._collocate_filter = ""
 
         root = QVBoxLayout(self)
@@ -429,6 +431,11 @@ class AnalysisPage(QWidget):
         )
         self.tabs.addTab(self._page_wrap(None, self._collocate_view), "Collocates")
 
+        self._phrase_model = DataFrameModel(pd.DataFrame(), self)
+        self._phrase_view = QTableView()
+        self._setup_table(self._phrase_view, self._phrase_model)
+        self.tabs.addTab(self._page_wrap(None, self._phrase_view), "Phrases")
+
         self._group_model = DataFrameModel(store.group_df, self)
         self._group_view = QTableView()
         self._setup_table(self._group_view, self._group_model)
@@ -454,6 +461,14 @@ class AnalysisPage(QWidget):
         self._view_stack.addWidget(self._run_config_view)
 
         self._new_run_button.clicked.connect(self._show_run_config)
+
+        # Evidence capture (Phase 3A)
+        self._evidence_button = QPushButton("Add to Evidence (E)")
+        header.addWidget(self._evidence_button)
+        self._evidence_button.clicked.connect(self._capture_evidence)
+        self.tabs.currentChanged.connect(lambda _i: self._apply_kwic_filter())
+        for view in (self._kwic_view, self._collocate_view, self._phrase_view, self._group_view):
+            view.installEventFilter(self)
 
         self._current_target = ""
         if store.targets:
@@ -501,6 +516,104 @@ class AnalysisPage(QWidget):
             subset = collocates[collocates["Target"] == self._current_target]
             subset = subset.drop(columns=["Target"], errors="ignore")
             self._collocate_model.set_dataframe(subset.reset_index(drop=True))
+        phrases = self.store.phrases_df
+        if not phrases.empty and "Target" in phrases.columns:
+            subset = phrases[phrases["Target"] == self._current_target]
+            subset = subset.drop(columns=["Target"], errors="ignore")
+            self._phrase_model.set_dataframe(subset.reset_index(drop=True))
+
+    # ------------------------------------------------------------------
+    # Evidence capture (Phase 3A)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt naming)
+        from PySide6.QtCore import QEvent, Qt as QtConst
+
+        if event.type() == QEvent.KeyPress and \
+                event.key() == QtConst.Key_E and not event.modifiers():
+            obj_to_kind = {
+                id(self._kwic_view): "kwic",
+                id(self._collocate_view): "collocate_pattern",
+                id(self._phrase_view): "phrase_pattern",
+                id(self._group_view): "group_pattern",
+            }
+            kind = obj_to_kind.get(id(obj))
+            if kind:
+                self._capture_evidence(kind)
+                return True
+        return super().eventFilter(obj, event)
+
+    def _capture_evidence(self, kind: Optional[str] = None) -> None:
+        """Add the current tab's selected row to the Evidence Inbox."""
+        if self.evidence is None:
+            self.inspector.show_empty("证据库未初始化。")
+            return
+        pointer = self.store.published_analysis()
+        if not pointer.get("published_run_id"):
+            self.inspector.show_empty(
+                "当前结果不属于任何已 COMMITTED 的 GUI 发布代际,不能作为正式研究证据。"
+                "请先通过 New Analysis Run 完成一次分析并发布。")
+            return
+        tab_index = self.tabs.currentIndex()
+        source_by_tab = {
+            0: ("kwic", self._kwic_view),
+            1: ("collocate_pattern", self._collocate_view),
+            2: ("phrase_pattern", self._phrase_view),
+            3: ("group_pattern", self._group_view),
+        }
+        evidence_type, view = source_by_tab[tab_index]
+        if kind and evidence_type != kind:
+            # direct key-capture on a specific view: switch to that tab first
+            for idx, (tab_kind, _v) in source_by_tab.items():
+                if tab_kind == kind:
+                    self.tabs.setCurrentIndex(idx)
+                    break
+            evidence_type, view = kind, source_by_tab[self.tabs.currentIndex()][1]
+        index = view.currentIndex()
+        if not index.isValid():
+            self.inspector.show_empty("请先在表中选择一行。")
+            return
+        row = view.model().row(index)
+
+        fingerprint_map = {
+            "kwic": [row.get("Document_ID", ""), row.get("Target", ""),
+                     row.get("Left_Context", ""), row.get("Keyword", ""),
+                     row.get("Right_Context", "")],
+            "collocate_pattern": [row.get("Collocate", "")],
+            "phrase_pattern": [row.get("Modifier_Phrase", "")],
+            "group_pattern": [row.get("Target", ""), row.get("Kind", ""),
+                              row.get("Expression", ""), row.get("Group_By", ""),
+                              row.get("Source_Group", "")],
+        }
+        from gui_next.data.evidence_store import item_fingerprint
+        fingerprint = item_fingerprint(evidence_type, pointer["published_run_id"],
+                                       *fingerprint_map[evidence_type])
+        already_in = any(
+            r["item_fingerprint"] == fingerprint and
+            r["evidence_type"] == evidence_type and
+            r["published_run_id"] == pointer["published_run_id"]
+            for r in self.evidence.evidence_records())
+        snapshot = {k: ("" if pd.isna(v) else v) for k, v in row.items()}
+        record = self.evidence.add_evidence(
+            evidence_type=evidence_type,
+            published_run_id=pointer["published_run_id"],
+            publication_manifest_hash=pointer.get("manifest_sha256", ""),
+            corpus_fingerprint=pointer.get("corpus_fingerprint", ""),
+            parameters_hash=pointer.get("params_hash", ""),
+            captured_snapshot=snapshot,
+            fingerprint_parts=fingerprint_map[evidence_type],
+            document_id=str(row.get("Document_ID", "") or ""),
+            target=str(row.get("Target", "") or self._current_target),
+            locator={"sheet": {"kwic": "KWIC", "collocate_pattern": "Collocates",
+                               "phrase_pattern": "Phrases",
+                               "group_pattern": "GroupComparison"}[evidence_type],
+                     "row_index": int(index.row())},
+        )
+        self.evidence.save()
+        if evidence_type == "kwic":
+            self.inspector.show_kwic(row)
+        self.inspector.set_badge(
+            "✓ In Evidence" if already_in else "✓ 已加入证据(Add to Evidence)",
+            theme.SUCCESS)
 
     def _apply_kwic_filter(self) -> None:
         kwic = self.store.kwic_df
@@ -542,13 +655,18 @@ class AnalysisPage(QWidget):
 class RunsPage(QWidget):
     """Research audit center: GUI analysis runs + frozen runs + manifests."""
 
-    def __init__(self, store: ProjectStore, inspector, parent=None):
+    def __init__(self, store: ProjectStore, inspector, *, evidence_store=None, parent=None):
         super().__init__(parent)
         self.setObjectName("Page")
         self.store = store
         self.inspector = inspector
 
         from gui_next.execution.jobs import load_journal
+        evidence_counts: Dict[str, int] = {}
+        if evidence_store is not None:
+            for record in evidence_store.evidence_records():
+                run_id = record.get("published_run_id", "")
+                evidence_counts[run_id] = evidence_counts.get(run_id, 0) + 1
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 24, 24, 24)
@@ -577,6 +695,7 @@ class RunsPage(QWidget):
                 "corpus_fp": (entry.get("corpus_fingerprint", "") or "")[:10],
                 "output": "work+published" if entry.get("status") == "SUCCEEDED" else
                           ("work dir kept" if entry.get("work_dir") else "–"),
+                "证据引用": evidence_counts.get(entry.get("run_id", ""), 0),
                 "note": entry.get("note", ""),
             })
         for row in store.runs_index():
