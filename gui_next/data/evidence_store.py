@@ -288,3 +288,55 @@ class EvidenceStore:
 
     def evidence_claims_grouped(self) -> Dict[str, Dict[str, Any]]:
         return self.state.get("claims", {})
+
+    # ------------------------------------------------------------------
+    # evidence lineage (Phase 3C)
+
+    def add_lineage_link(self, source_evidence_id: str, target_evidence_id: str,
+                         relationship: str = "UPDATED_COUNTERPART",
+                         comparison_run_pair: str = "") -> Dict[str, Any]:
+        links = self.state.setdefault("evidence_links", {})
+        link_id = "link_" + uuid.uuid4().hex[:12]
+        links[link_id] = {
+            "link_id": link_id,
+            "source_evidence_id": source_evidence_id,
+            "target_evidence_id": target_evidence_id,
+            "relationship": relationship,
+            "comparison_run_pair": comparison_run_pair,
+            "created_at": _now(),
+        }
+        return links[link_id]
+
+    def get_lineage(self, evidence_id: str) -> List[Dict[str, Any]]:
+        return [link for link in self.state.get("evidence_links", {}).values()
+                if link.get("source_evidence_id") == evidence_id or
+                   link.get("target_evidence_id") == evidence_id]
+
+    def newer_counterpart(self, evidence_id: str) -> Optional[str]:
+        """Return the newer counterpart evidence id, if linked."""
+        for link in self.state.get("evidence_links", {}).values():
+            if link.get("source_evidence_id") == evidence_id and \
+                    link.get("relationship") == "UPDATED_COUNTERPART":
+                return link.get("target_evidence_id")
+        return None
+
+    def replace_in_claim(self, claim_id: str, old_evidence_id: str,
+                         new_evidence_id: str) -> None:
+        """Replace one evidence reference in a claim (old record preserved)."""
+        claim = self.get_claim(claim_id)
+        if claim is None:
+            raise KeyError(claim_id)
+        if old_evidence_id in claim.get("evidence_ids", []):
+            claim["evidence_ids"] = [e for e in claim["evidence_ids"] if e != old_evidence_id]
+            if new_evidence_id not in claim["evidence_ids"]:
+                claim["evidence_ids"].append(new_evidence_id)
+            claim["updated_at"] = _now()
+
+    def refresh_audit_entries(self) -> List[Dict[str, Any]]:
+        return list(self.state.get("refresh_audit", []))
+
+    def log_refresh(self, entry: Dict[str, Any]) -> None:
+        audit = self.state.setdefault("refresh_audit", [])
+        entry["at"] = _now()
+        audit.append(entry)
+        del audit[:-200]

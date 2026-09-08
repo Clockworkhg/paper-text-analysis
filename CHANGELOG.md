@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.5.2-unreleased - gui-next Phase 3C: Published Run Compare & Evidence Refresh
+
+### Added
+
+- Run Compare: compare two COMMITTED published generations side by side.
+  Compatibility gate classifies as FULLY_COMPARABLE / PARTIALLY_COMPARABLE /
+  NOT_COMPARABLE based on corpus fingerprint, document count, target set,
+  group_by, MI threshold, algorithm and hand-rules versions. Includes target
+  comparison (added/removed/changed/unchanged with deltas), collocate/phrase/
+  group pattern diffs, and document identity mapping (EXACT_ID /
+  CONTENT_MATCH / METADATA_MATCH / AMBIGUOUS / UNMATCHED). Comparison export
+  to Markdown with method boundary disclaimer.
+- Evidence Refresh workflow: "Check against newer run" finds candidate
+  counterpart evidence in a newer published run. Researcher can add the new
+  evidence record (linked via evidence lineage UPDATED_COUNTERPART), replace
+  an old reference in a Claim (old record preserved), or keep historical
+  evidence as-is. Evidence Refresh Audit export for methodology tracking.
+- Evidence lineage (`evidence_links` in evidence.json): non-destructive
+  relationships between evidence records across published generations.
+- Runs page Compare button + comparison Markdown export with method
+  boundary disclaimer.
+
+## 0.5.1-unreleased - gui-next Phase 3B: Evidence-aware Writing Workspace
 ## 0.5.1-unreleased - gui-next Phase 3B: Evidence-aware Writing Workspace
 
 ### Added

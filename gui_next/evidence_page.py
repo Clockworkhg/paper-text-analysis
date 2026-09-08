@@ -133,6 +133,12 @@ class EvidencePage(QWidget):
         self._new_claim_button.clicked.connect(self._new_claim_dialog)
         self._export_button = QPushButton("Export Claim Evidence Packet")
         self._export_button.clicked.connect(self._export_packet)
+        self._check_newer_button = QPushButton("Check against newer run")
+        self._check_newer_button.clicked.connect(self._check_newer_run)
+        self._replace_button = QPushButton("Replace in Claim")
+        self._replace_button.clicked.connect(self._replace_in_claim)
+        header.addWidget(self._check_newer_button)
+        header.addWidget(self._replace_button)
         header.addWidget(self._export_button)
         header.addWidget(self._new_claim_button)
         root.addLayout(header)
@@ -377,12 +383,167 @@ class EvidencePage(QWidget):
         if not self._current_claim_id:
             return
         claim = self.evidence.get_claim(self._current_claim_id) or {}
+        title = claim.get('title', '')
         if QMessageBox.question(
                 self, "Delete Claim",
-                f"删除 Claim“{claim.get('title', '')}”?\n证据记录本身不会被删除。") != QMessageBox.Yes:
+                f"删除 Claim\u201c{title}\u201d?\n证据记录本身不会被删除。") != QMessageBox.Yes:
             return
         self.evidence.delete_claim(self._current_claim_id)
         self._current_claim_id = None
+        self.evidence.save()
+        self.refresh()
+
+    def _pointer(self) -> Dict[str, Any]:
+        return self.published_provider() or {}
+
+    def _check_newer_run(self) -> None:
+        pointer = self._pointer()
+        current_run = pointer.get("published_run_id", "")
+        record = self._selected_record()
+        if record is None or not current_run:
+            QMessageBox.information(self, "Check newer run", "请先选择一条证据。")
+            return
+        old_run = record.get("published_run_id", "")
+        if old_run == current_run:
+            QMessageBox.information(self, "Check newer run", "该证据已绑定当前最新发布运行。")
+            return
+        from gui_next.execution.compare import find_evidence_counterpart
+        result = find_evidence_counterpart(self.evidence.root, current_run, record)
+        if result.get("state") == "CANDIDATE_MATCH":
+            counterpart = result.get("counterpart", {})
+            summary = counterpart.get("Collocate", counterpart.get("Keyword", ""))
+            msg = (f"Possible updated counterpart in Run #{current_run[-8:]}\n\n"
+                   f"Old (Run #{old_run[-8:]}): {record.get('target', '')} / {summary}\n\n"
+                   "Add Run B as additional evidence + link as UPDATED_COUNTERPART?")
+            if QMessageBox.question(self, "Evidence Refresh", msg) == QMessageBox.Yes:
+                new_rec = self.evidence.add_evidence(
+                    evidence_type=record["evidence_type"],
+                    published_run_id=current_run,
+                    publication_manifest_hash=pointer.get("manifest_sha256", ""),
+                    corpus_fingerprint=pointer.get("corpus_fingerprint", ""),
+                    parameters_hash=pointer.get("params_hash", ""),
+                    captured_snapshot={k: ("" if pd.isna(v) else v)
+                                       for k, v in counterpart.items()},
+                    fingerprint_parts=[counterpart.get("Target", ""),
+                                       counterpart.get("Collocate",
+                                                       counterpart.get("Keyword", ""))],
+                    document_id=str(counterpart.get("Document_ID", "")),
+                    target=str(counterpart.get("Target", "")),
+                    locator={"published_run_id": current_run})
+                self.evidence.add_lineage_link(
+                    record["evidence_id"], new_rec["evidence_id"],
+                    comparison_run_pair=f"{old_run}__{current_run}")
+                self.evidence.log_refresh({
+                    "claim_id": "", "old_evidence_id": record["evidence_id"],
+                    "old_run": old_run, "new_evidence_id": new_rec["evidence_id"],
+                    "new_run": current_run, "decision": "add_new_counterpart"})
+                self.evidence.save()
+                self.refresh()
+        else:
+            QMessageBox.information(self, "Evidence Refresh",
+                                    f"在 Run #{current_run[-8:]} 中未找到对应证据。")
+
+    def _replace_in_claim(self) -> None:
+        record = self._selected_record()
+        if record is None:
+            return
+        evidence_id = record["evidence_id"]
+        newer_id = self.evidence.newer_counterpart(evidence_id)
+        if not newer_id:
+            QMessageBox.information(self, "Replace in Claim",
+                                    "该证据没有已链接的 newer counterpart。")
+            return
+        refs = self.evidence.claim_refs(evidence_id)
+        if not refs:
+            QMessageBox.information(self, "Replace in Claim", "该证据未被任何 Claim 引用。")
+            return
+        claim_id = refs[0]
+        self.evidence.replace_in_claim(claim_id, evidence_id, newer_id)
+        self.evidence.log_refresh({
+            "claim_id": claim_id, "old_evidence_id": evidence_id,
+            "old_run": record.get("published_run_id", ""),
+            "new_evidence_id": newer_id,
+            "new_run": (self.evidence.get_evidence(newer_id) or {}).get("published_run_id", ""),
+            "decision": "replace_in_claim"})
+        self.evidence.save()
+        self.refresh()
+
+    # ------------------------------------------------------------------
+    # Evidence Refresh (Phase 3C)
+
+    def _check_newer_run(self) -> None:
+        """Find counterpart evidence in a newer published run."""
+        pointer = self._pointer()
+        current_run = pointer.get("published_run_id", "")
+        record = self._selected_record()
+        if record is None or not current_run:
+            QMessageBox.information(self, "Check newer run", "请先选择一条证据。")
+            return
+        old_run = record.get("published_run_id", "")
+        if old_run == current_run:
+            QMessageBox.information(self, "Check newer run", "该证据已绑定当前最新发布运行。")
+            return
+        from gui_next.execution.compare import find_evidence_counterpart
+        result = find_evidence_counterpart(self.evidence.root, current_run, record)
+        if result["state"] == "CANDIDATE_MATCH":
+            counterpart = result["counterpart"]
+            msg = (f"Possible updated counterpart in Run #{current_run[-8:]}\n\n"
+                   f"Old (Run #{old_run[-8:]}): {record.get('target', '')}\n"
+                   f"New (Run #{current_run[-8:]}): {counterpart.get('Target', '')} "
+                   f"{counterpart.get('Collocate', counterpart.get('Keyword', ''))}\n\n"
+                   "Add Run B as additional evidence + link as UPDATED_COUNTERPART?")
+            if QMessageBox.question(self, "Evidence Refresh", msg) == QMessageBox.Yes:
+                pointer = self._pointer()
+                new_rec = self.evidence.add_evidence(
+                    evidence_type=record["evidence_type"],
+                    published_run_id=current_run,
+                    publication_manifest_hash=pointer.get("manifest_sha256", ""),
+                    corpus_fingerprint=pointer.get("corpus_fingerprint", ""),
+                    parameters_hash=pointer.get("params_hash", ""),
+                    captured_snapshot={k: ("" if pd.isna(v) else v)
+                                       for k, v in counterpart.items()},
+                    fingerprint_parts=[counterpart.get("Target", ""),
+                                       counterpart.get("Collocate",
+                                                       counterpart.get("Keyword", ""))],
+                    document_id=str(counterpart.get("Document_ID", "")),
+                    target=str(counterpart.get("Target", "")),
+                    locator={"sheet": "published_generation", "published_run_id": current_run})
+                self.evidence.add_lineage_link(record["evidence_id"],
+                                               new_rec["evidence_id"],
+                                               comparison_run_pair=f"{old_run}__{current_run}")
+                self.evidence.log_refresh({
+                    "claim_id": "", "old_evidence_id": record["evidence_id"],
+                    "old_run": old_run, "new_evidence_id": new_rec["evidence_id"],
+                    "new_run": current_run, "decision": "add_new_counterpart"})
+                self.evidence.save()
+                self.refresh()
+        else:
+            QMessageBox.information(self, "Evidence Refresh",
+                                    f"在 Run #{current_run[-8:]} 中未找到对应证据。")
+
+    def _replace_in_claim(self) -> None:
+        """Replace an older evidence reference in a claim with its newer counterpart."""
+        record = self._selected_record()
+        if record is None:
+            return
+        evidence_id = record["evidence_id"]
+        newer_id = self.evidence.newer_counterpart(evidence_id)
+        if not newer_id:
+            QMessageBox.information(self, "Replace in Claim",
+                                    "该证据没有已链接的 newer counterpart;先运行 Check against newer run。")
+            return
+        refs = self.evidence.claim_refs(evidence_id)
+        if not refs:
+            QMessageBox.information(self, "Replace in Claim", "该证据未被任何 Claim 引用。")
+            return
+        claim_id = refs[0]
+        self.evidence.replace_in_claim(claim_id, evidence_id, newer_id)
+        self.evidence.log_refresh({
+            "claim_id": claim_id, "old_evidence_id": evidence_id,
+            "old_run": record.get("published_run_id", ""),
+            "new_evidence_id": newer_id,
+            "new_run": (self.evidence.get_evidence(newer_id) or {}).get("published_run_id", ""),
+            "decision": "replace_in_claim"})
         self.evidence.save()
         self.refresh()
 

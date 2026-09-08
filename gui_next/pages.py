@@ -715,10 +715,84 @@ class RunsPage(QWidget):
         self._table_view = _table(df)
         self._table_view.doubleClicked.connect(self._on_select)
         root.addWidget(self._table_view, 1)
+
+        # Compare Published Runs (Phase 3C)
+        self._evidence_store = evidence_store
+        compare_button = QPushButton("Compare Published Runs")
+        compare_button.clicked.connect(self._open_compare)
+        root.addWidget(compare_button)
+
         root.addWidget(_muted(
             "双击冻结运行查看 Research Run Manifest;GUI 运行的 success/failed/cancelled/"
-            "interrupted 状态、参数与输出可用性直接在表中显示。"))
+            "interrupted 状态、参数与输出可用性直接在表中显示。"
+            "\nⓘ Run differences describe changes in corpus/output under the recorded "
+            "analysis configurations. They do not by themselves establish substantive discourse change."))
         self._rows = rows
+
+    def _open_compare(self) -> None:
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QPushButton
+        from gui_next.execution.compare import (
+            compare_overview, compare_targets, export_comparison_markdown,
+            build_document_mapping,
+        )
+
+        successful = [r for r in self._rows
+                      if r.get("status") in ("✓ success", "SUCCEEDED")]
+        if len(successful) < 2:
+            QMessageBox.information(self, "Compare",
+                                    "需要至少两个已成功发布的运行才能进行比较。")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Compare Published Runs")
+        dialog.resize(900, 640)
+        layout = QVBoxLayout(dialog)
+
+        run_a = successful[0]["run_id"]
+        run_b = successful[-1]["run_id"]
+        overview = compare_overview(self.store.root, run_a, run_b)
+        compat = overview["compatibility"]
+
+        text = QTextBrowser()
+        md_lines = [
+            f"<h2>Run A: <code>{run_a}</code></h2>",
+            f"<h2>Run B: <code>{run_b}</code></h2>",
+            f"<p><b>Compatibility: {compat['level']}</b></p>",
+            "<table border='1' cellpadding='4'>",
+            "<tr><th>Field</th><th>Run A</th><th>Run B</th></tr>",
+            f"<tr><td>Documents</td><td>{overview['documents_a']}</td><td>{overview['documents_b']}</td></tr>",
+            f"<tr><td>KWIC rows</td><td>{overview['kwic_count_a']}</td><td>{overview['kwic_count_b']}</td></tr>",
+            f"<tr><td>Collocates</td><td>{overview['collocate_count_a']}</td><td>{overview['collocate_count_b']}</td></tr>",
+            f"<tr><td>Phrases</td><td>{overview['phrase_count_a']}</td><td>{overview['phrase_count_b']}</td></tr>",
+            f"<tr><td>group_by</td><td>{overview['group_by_a']}</td><td>{overview['group_by_b']}</td></tr>",
+            f"<tr><td>MI threshold</td><td>{overview['mi_a']}</td><td>{overview['mi_b']}</td></tr>",
+            "</table>",
+        ]
+        if compat["differences"]:
+            md_lines.append("<p><b>Differences:</b></p><ul>")
+            for d in compat["differences"]:
+                md_lines.append(f"<li>{d['field']}: {d['a']} → {d['b']}</li>")
+            md_lines.append("</ul>")
+        else:
+            md_lines.append("<p>No parameter differences detected.</p>")
+        md_lines.append("<p style='color:gray'>ⓘ Run differences describe changes in corpus/output "
+                        "under the recorded analysis configurations. They do not by themselves "
+                        "establish substantive discourse change.</p>")
+        text.setHtml("".join(md_lines))
+        layout.addWidget(text, 1)
+
+        export_button = QPushButton("Export Comparison Markdown")
+        export_button.clicked.connect(lambda: self._export_compare(run_a, run_b))
+        layout.addWidget(export_button)
+        close = QPushButton("关闭")
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(close)
+        dialog.exec()
+
+    def _export_compare(self, run_a: str, run_b: str) -> None:
+        from gui_next.execution.compare import export_comparison_markdown
+        path = export_comparison_markdown(self.store.root, run_a, run_b)
+        QMessageBox.information(self, "Export", f"已导出: {path}")
 
     def _on_select(self, index) -> None:
         row = self._rows[index.row()]

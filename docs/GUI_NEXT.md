@@ -340,6 +340,39 @@ SOURCE_UNAVAILABLE 时仍显示 captured_snapshot 并标注 ⚠;INTEGRITY_ERROR 
   Evidence 页规则控制。
 - 无 AI 自动写作;无 DOCX;无 Run Compare。
 
+## Phase 3C:Published Run Compare & Evidence Refresh
+
+### Run Compare
+
+Runs 页 "Compare Published Runs" 按钮:仅允许比较 COMMITTED 的已发布代际;
+比较通过 Historical Generation Resolver 读取归档产物,不从项目根读取。
+
+兼容性三级门禁:
+- FULLY_COMPARABLE:corpus fingerprint、document count、target set、group_by、
+  MI threshold、algorithm/rules version 全部一致
+- PARTIALLY_COMPARABLE:部分参数不同但核心维度仍有交集
+- NOT_COMPARABLE:corpus + algorithm 同时变化或目标词零交集
+
+比较输出:Documents/KWIC/Collocates/Phrases 计数、Targets(added/removed/changed/
+unchanged + delta%)、Document Mapping(EXACT_ID / CONTENT_MATCH / METADATA_MATCH /
+AMBIGUOUS / UNMATCHED)、Compatible Pattern Delta(ΔMI/ΔG²)。所有变化仅为描述性
+(增/减/出现/消失),不自动解释话语含义。
+
+可导出 Comparison Markdown(Run A/B 溯源 + 兼容性 + 目标差异 + 文档映射摘要)。
+
+### Evidence Refresh
+
+Evidence 页 "Check against newer run":在较新已发布代际中寻找对应证据,发现
+CANDIDATE_MATCH 后可选择 Add as additional evidence(自动链接 lineage
+UPDATED_COUNTERPART),或 Replace in Claim(修改 Claim 引用关系,旧证据保留)。
+
+Evidence lineage(`evidence_links`)记录 source/target/relationship/
+comparison_run_pair;第一阶段仅支持 UPDATED_COUNTERPART 和 RELATED。
+Evidence Refresh Audit Markdown 可导出(方法审计,非论文正文)。
+
+**永不自动升级**:发布新 Run 后,旧 Evidence 仍为 Verified Historical Evidence,
+Claim/Writing 不自动变化,选择权完全在研究者。
+
 ## 阶段规划
 
 | 阶段 | 内容 | 状态 |
@@ -350,6 +383,7 @@ SOURCE_UNAVAILABLE 时仍显示 captured_snapshot 并标注 ⚠;INTEGRITY_ERROR 
 | Phase 2B.1 | 事务化发布(manifest 契约/备份回滚/崩溃恢复/发布身份/sanity parity) | ✅ |
 | Phase 3A | Evidence Trail Core(证据捕获/Claim 工作台/历史代际解析/完整性校验) | ✅ |
 | Phase 3B | Evidence-aware Writing Workspace(结构化写作/证据卡片/Markdown 导出/Appendix) | ✅ |
+| Phase 3C | Published Run Compare & Evidence Refresh(兼容性门禁/目标差异/文档映射/证据刷新) | ✅ |
 | Phase 3 | Evidence Trail(证据篮 → Claim→Pattern→KWIC→Document→Run 导出)、Run Compare、Report | 待做 |
 | 收尾 | 旧 Tkinter GUI 移除(CLI 永久保留) | 待做 |
 
