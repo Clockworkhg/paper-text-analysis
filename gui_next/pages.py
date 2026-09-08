@@ -561,6 +561,8 @@ class RunsPage(QWidget):
             "SUCCEEDED": "✓ success", "FAILED": "✕ failed", "CANCELLED": "○ cancelled",
             "INTERRUPTED": "⚠ interrupted", "RUNNING": "● running",
             "PREPARING": "● preparing", "CANCELLING": "● cancelling",
+            "ANALYSIS_SUCCEEDED": "✓ analysis ok / publishing",
+            "PUBLISHING": "● publishing", "PUBLISH_FAILED": "✕ publish failed",
         }
         rows = []
         for entry in load_journal(store.root):

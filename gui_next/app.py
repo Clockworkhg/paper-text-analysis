@@ -155,10 +155,22 @@ class MainWindow(QMainWindow):
             return
         self.store = store
 
-        # Crash recovery: runs stuck active from a dead session -> INTERRUPTED.
+        # Crash recovery: publication transactions first (rollback to the
+        # previous generation), then run-journal states.
+        from gui_next.execution.publication import recover_publications, recovery_required
+
+        for record in recover_publications(store.root):
+            self._log_status(f"发布事务已回滚恢复: {record.get('run_id', '')} ({record.get('state')})")
         recovered = run_jobs.recover_interrupted_runs(store.root)
         for entry in recovered:
-            self._log_status(f"上次会话的运行 {entry.get('run_id', '')} 未完成,已标记为 INTERRUPTED(现场保留)。")
+            if entry.get("status") == "PUBLISH_FAILED":
+                self._log_status(f"运行 {entry.get('run_id', '')} 的发布被会话中断,已回滚并标记 PUBLISH_FAILED。")
+            else:
+                self._log_status(f"上次会话的运行 {entry.get('run_id', '')} 未完成,已标记为 INTERRUPTED(现场保留)。")
+        pending_recovery = recovery_required(store.root)
+        if pending_recovery:
+            self._log_status(
+                f"⚠ 存在 RECOVERY_REQUIRED 发布事务({len(pending_recovery)} 个),新的分析发布已被禁止,直至完整性解决。")
 
         # Review stores (the only review-write components in gui-next).
         source_review = SourceCountryReviewStore(store.root, documents_df=store.documents_df)

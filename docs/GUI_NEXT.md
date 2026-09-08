@@ -141,6 +141,81 @@ Advanced 区提供 `--skip-sanity` 同级逃生口,固定警告"跳过卫生检�
 
 分析成功发布后自动刷新 Analysis/Overview/Runs;Corpus Health 保持事实状态;候选集因重生成而变化时,旧 Review state 经 2A.1 指纹机制自然进入 STALE(绝不手工删除)。复核绑定调和后 FINAL 工作簿时,分析不会使其失效(调和产物不受重生成影响)。
 
+## Phase 2B.1:Transactional Publication Integrity
+
+分析运行的发布具备事务语义:任何 publish error / crash / stale output 都不会形成
+"新旧结果混合"的伪成功状态。
+
+### 生命周期拆分
+
+`ANALYSIS_SUCCEEDED`(子进程 exit 0)→ `PUBLISHING`(事务进行中)→ `SUCCEEDED`
+(事务 COMMITTED);失败进入 `PUBLISH_FAILED`。**子进程退出码 0 不等于正式项目
+已获得新结果**;Runs 页与日志可区分 "Analysis succeeded" 与 "Publication failed"。
+
+### Publication Manifest(allowlist 契约)
+
+分析完成后先构建 manifest,不允许直接递归复制。manifest 记录 run_id、
+corpus_fingerprint、params_hash、previous_published_run_id、generated_at、
+逐文件 relative_path/sha256/size/category、files_to_remove 与 excluded 清单。
+
+Owned-output 契约是 **allowlist**(工作簿/运行配置/登记表/国别表/复核模板/报告
+逐路径列明):corpus 原文、review state、源码、runs 内其他运行内容、project.json
+一律不在清单内——不是"排除几个已知文件"的黑名单。路径安全校验拒绝绝对路径、
+`..`、越契约路径。
+
+### 防陈旧:最小工作副本 + produced diff
+
+工作副本只复制运行输入(corpus、project.json[重定向]、merged_sources、
+group_overrides),**不复制上一轮分析产物**;runner 在分析前后对工作副本做文件集
+diff,只有本轮真实产生的文件才可能进入 manifest——手工放入工作副本的旧文件永远
+不会被发布。
+
+### 事务提交与回滚
+
+`PREPARE`(manifest 校验+逐文件哈希)→ `BACKUP`(旧 owned outputs 复制入
+`runs/pub_<run_id>/backup`)→ 写 publication journal → `COMMITTING`(逐项
+os.replace + 过期 owned output 删除,全部可回滚)→ `COMMITTED`(清理 staging/
+backup,保留 manifest 与 journal)→ 运行才标记 SUCCEEDED。任一步失败 →
+ROLLBACK:已替换文件从备份恢复、本轮新建文件删除——**要么完整新 generation,
+要么完整旧 generation**。
+
+`project.json` 不在发布文件集内:身份/配置字段绝不覆盖;COMMITTED 后由执行层
+做字段级合并(仅追加 analyze 历史与刷新 analysis-owned latest 指针)。
+
+### 崩溃恢复
+
+启动时扫描 `pub_*/journal.json` 中 state=COMMITTING 的事务,自动
+ROLLBACK_TO_PREVIOUS_GENERATION;无法恢复时标记 RECOVERY_REQUIRED 并禁止新的
+分析发布,直至完整性解决。journal、backup、work dir、diagnostics 一律保留。
+
+### 已发布身份(为 Phase 3 Evidence→Run 预留)
+
+COMMITTED 后写入 `runs/published_analysis.json`:
+published_run_id / manifest_sha256 / corpus_fingerprint / params_hash /
+completed_at。Overview 的"当前结果"芯片与该指针——而不是"项目根恰有哪些
+xlsx"——回答"当前展示的结果来自哪次运行"。
+
+### Sanity adapter parity
+
+GUI sanity 与 shared/CLI 使用同一组检查函数(不允许出现第二套健康算法);
+parity 测试对同一项目比对 document count / failure counts / ok 判定,完全一致。
+
+### Development note — project_dir 写穿事故(Phase 2A.1 期间)
+
+- **原因**:`project_analyze` / `project_sanity` 均以 project.json 内的
+  `project_dir` 字段定位项目根,而非传入路径。Phase 2B 前的工作副本/离线
+  sanity 未重定向该字段,导致一次自动化验证把 sanity 报告与一条 history 写入
+  正式项目 `projects/systemic_competitor`。
+- **影响范围**:仅新增 1 个报告文件与 1 条 history;语料、分析工作簿、
+  run_config、复核工作簿经哈希核对**完全未受影响**。
+- **恢复**:删除报告文件、过滤 history 条目、语义校验通过(project.json 仅
+  `updated_at` 时间戳漂移,属良性)。
+- **防回归**:①工作副本构建时强制重定向 project_dir(jobs.make_work_dir);
+  ②sanity 任务不再经 project_sanity,直接按传入目录组合 shared 检查函数
+  (runner.run_sanity_job);③controller 全路径不再透传用户目录给写操作;
+  ④Phase 2B.1 起发布只允许契约内路径;⑤相关单元测试与真实项目副本 E2E
+  覆盖上述每一条。
+
 ## 阶段规划
 
 | 阶段 | 内容 | 状态 |
@@ -148,6 +223,7 @@ Advanced 区提供 `--skip-sanity` 同级逃生口,固定警告"跳过卫生检�
 | Phase 1 | Overview / Corpus / Analysis(KWIC)/ Review 只读 + Inspector + Runs | ✅ |
 | Phase 2A | **Human Review Workbench**:Source/Country 复核(证据面板 + Accept/Change/Uncertain/Exclude)、语义韵键盘编码工作台、Overview 状态拆分、语料健康状态机、写边界 `review_store.py` | ✅ |
 | Phase 2B | 分析运行接入(执行层/生命周期/隔离/取消/崩溃恢复) | ✅ |
+| Phase 2B.1 | 事务化发布(manifest 契约/备份回滚/崩溃恢复/发布身份/sanity parity) | ✅ |
 | Phase 3 | Evidence Trail(证据篮 → Claim→Pattern→KWIC→Document→Run 导出)、Run Compare、Report | 待做 |
 | 收尾 | 旧 Tkinter GUI 移除(CLI 永久保留) | 待做 |
 

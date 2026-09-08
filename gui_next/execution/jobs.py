@@ -178,9 +178,14 @@ def recover_interrupted_runs(project_dir: str | Path) -> List[Dict[str, Any]]:
             continue
         if pid_alive(entry.get("pid")):
             continue
-        entry["status"] = RunState.INTERRUPTED.value
+        if state in (RunState.ANALYSIS_SUCCEEDED.value, RunState.PUBLISHING.value):
+            entry["status"] = RunState.PUBLISH_FAILED.value
+            entry["note"] = ("Publication interrupted by session end; the publication "
+                             "transaction was rolled back on next startup.")
+        else:
+            entry["status"] = RunState.INTERRUPTED.value
+            entry["note"] = "Previous application session ended before this run completed."
         entry["finished_at"] = _now()
-        entry["note"] = "Previous application session ended before this run completed."
         recovered.append(entry)
         changed = True
         release_writer_lock(project_dir, entry.get("run_id"))
@@ -193,11 +198,20 @@ def recover_interrupted_runs(project_dir: str | Path) -> List[Dict[str, Any]]:
 # Work directory
 # ---------------------------------------------------------------------------
 
+# Inputs the analysis needs from the real project. Derived analysis outputs
+# from previous runs are deliberately NOT copied: a stale file must never be
+# able to impersonate a fresh result in the publication manifest.
+WORK_COPY_INPUT_FILES = [
+    "merged_sources.xlsx",                    # input for the country join
+    Path("01_corpus") / "group_overrides.xlsx",  # input for custom grouping
+]
+
 
 def make_work_dir(project_dir: str | Path, run_id: str) -> Path:
-    """Snapshot the project into an isolated work copy for one analysis run.
+    """Build an isolated, minimal work copy for one analysis run.
 
-    The copy's ``project.json`` is repointed at the work copy itself:
+    Contains only run inputs (corpus, project identity, overrides). The
+    copy's ``project.json`` is repointed at the work copy itself:
     ``project_analyze`` locates the project root through that field, so
     without this step every write would bypass isolation and land in the
     real project.
@@ -206,72 +220,30 @@ def make_work_dir(project_dir: str | Path, run_id: str) -> Path:
     work = root / "runs" / f"work_{run_id}"
     if work.exists():
         shutil.rmtree(work)
-    shutil.copytree(
-        root,
-        work,
-        ignore=shutil.ignore_patterns("runs", ".zcode", ".git", "__pycache__", ".pytest_cache"),
-    )
-    info = _read_json(work / "project.json", {})
+    work.mkdir(parents=True)
+    shutil.copytree(root / "corpus", work / "corpus")
+    for rel in WORK_COPY_INPUT_FILES:
+        src = root / rel
+        if src.exists():
+            dst = work / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+    info = _read_json(root / "project.json", {})
     info["project_dir"] = str(work)
     (work / "project.json").write_text(
         json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
     return work
 
 
-def publish_outputs(work_dir: Path, project_dir: str | Path,
-                    log_fn=None) -> List[str]:
-    """Copy a succeeded run's outputs from the work copy to the project root.
-
-    Only artifacts that an analysis run (re)generates are published, so old
-    successful results are replaced exactly once, atomically-enough per
-    file, and only after the run fully succeeded. Review state files are
-    never published (they belong to the live project).
-    """
-    work = Path(work_dir)
-    root = Path(project_dir)
-    published: List[str] = []
-
-    files = [
-        "run_config.json",
-        "adjectives_phrases.xlsx",
-        "adjectives_final.xlsx",
-        "project.json",
-    ]
-    dirs = ["00_run_config", "01_corpus", "03_country", "06_review", "07_reports"]
-
-    def copy_file(rel: str) -> None:
-        src = work / rel
-        if not src.exists():
-            return
-        target = root / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, target)
-        published.append(rel)
-
-    for rel in files:
-        copy_file(rel)
-    # project.json was repointed at the work copy for isolation; restore the
-    # real root path before it lands back in the project.
-    info = _read_json(root / "project.json", {})
-    if info.get("project_dir"):
-        info["project_dir"] = str(root)
-        (root / "project.json").write_text(
-            json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
-    for dirname in dirs:
-        src_dir = work / dirname
-        if not src_dir.exists():
-            continue
-        for src in sorted(src_dir.rglob("*")):
-            if not src.is_file():
-                continue
-            rel = src.relative_to(work).as_posix()
-            if dirname == "06_review" and rel.endswith("_state.json"):
-                continue  # live review state belongs to the project, never publish
-            copy_file(rel)
-
-    if log_fn:
-        log_fn(f"已发布 {len(published)} 个产物文件到项目目录")
-    return published
+def snapshot_files(root: str | Path) -> set:
+    """Relative paths of every file under a directory (for produced diffs)."""
+    root = Path(root)
+    if not root.exists():
+        return set()
+    return {
+        p.relative_to(root).as_posix()
+        for p in root.rglob("*") if p.is_file()
+    }
 
 
 # ---------------------------------------------------------------------------

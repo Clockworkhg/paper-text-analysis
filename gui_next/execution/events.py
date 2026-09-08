@@ -17,14 +17,19 @@ class RunState(str, Enum):
     PREPARING = "PREPARING"
     RUNNING = "RUNNING"
     CANCELLING = "CANCELLING"
-    SUCCEEDED = "SUCCEEDED"
+    ANALYSIS_SUCCEEDED = "ANALYSIS_SUCCEEDED"   # child exit 0; publication pending
+    PUBLISHING = "PUBLISHING"                   # transaction in progress
+    SUCCEEDED = "SUCCEEDED"                     # publication COMMITTED
+    PUBLISH_FAILED = "PUBLISH_FAILED"           # publication failed/rolled back
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
     INTERRUPTED = "INTERRUPTED"
 
 
-ACTIVE_STATES = {RunState.PREPARING, RunState.RUNNING, RunState.CANCELLING}
-TERMINAL_STATES = {RunState.SUCCEEDED, RunState.FAILED, RunState.CANCELLED, RunState.INTERRUPTED}
+ACTIVE_STATES = {RunState.PREPARING, RunState.RUNNING, RunState.CANCELLING,
+                 RunState.ANALYSIS_SUCCEEDED, RunState.PUBLISHING}
+TERMINAL_STATES = {RunState.SUCCEEDED, RunState.PUBLISH_FAILED, RunState.FAILED,
+                   RunState.CANCELLED, RunState.INTERRUPTED}
 
 
 def encode(event: dict) -> str:

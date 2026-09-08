@@ -21,7 +21,7 @@ from typing import Optional
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
 from gui_next.execution import jobs
-from gui_next.execution.events import RunState, parse
+from gui_next.execution.events import ACTIVE_STATES, RunState, parse
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -44,6 +44,8 @@ class AnalysisController(QObject):
         self.last_error: Optional[dict] = None
         self.outputs: dict = {}
         self.error: Optional[str] = None
+        self._corpus_fingerprint = ""
+        self.publication_fault_injection: Optional[dict] = None
 
         self._process: Optional[QProcess] = None
         self._cancel_requested = False
@@ -62,7 +64,12 @@ class AnalysisController(QObject):
     # starting
 
     def start(self, spec: dict, run_id: str) -> bool:
-        if self.state in (RunState.PREPARING, RunState.RUNNING, RunState.CANCELLING):
+        from gui_next.execution.publication import recovery_required
+
+        if self.state in ACTIVE_STATES:
+            return False
+        if recovery_required(self.root):
+            self.last_error = "存在 RECOVERY_REQUIRED 的发布事务,完整性解决前禁止新的分析发布。"
             return False
         if jobs.active_writer(self.root):
             return False
@@ -130,10 +137,10 @@ class AnalysisController(QObject):
         pid = self._process.processId()
         try:
             from shared.corpus_sanity import corpus_fingerprint
-            corpus_fp = corpus_fingerprint(self.root / "corpus")["sha256"]
+            self._corpus_fingerprint = corpus_fingerprint(self.root / "corpus")["sha256"]
         except Exception:
-            corpus_fp = ""
-        jobs.update_run(self.root, run_id, pid=pid, corpus_fingerprint=corpus_fp)
+            self._corpus_fingerprint = ""
+        jobs.update_run(self.root, run_id, pid=pid, corpus_fingerprint=self._corpus_fingerprint)
         return True
 
     # ------------------------------------------------------------------
@@ -236,19 +243,67 @@ class AnalysisController(QObject):
             self._terminate()
             return
 
-        # Success: publish the isolated outputs to the project.
-        self._set_state(RunState.RUNNING, "发布分析产物到项目目录 …")
-        try:
-            published = jobs.publish_outputs(self.work_dir, self.root,
-                                             log_fn=lambda m: self.log_line.emit(m))
-        except Exception as exc:
-            self._fail(f"产物发布失败(工作目录已保留): {exc}")
-            return
+        self._publish()
+
+    # ------------------------------------------------------------------
+    # transactional publication (Phase 2B.1)
+
+    def _publish(self) -> None:
+        from gui_next.execution import publication
+        from gui_next.execution.publication import PublicationError
+
+        self._set_state(RunState.ANALYSIS_SUCCEEDED,
+                        "分析子进程成功完成;准备事务化发布产物")
         jobs.update_run(self.root, self.run_id,
-                        status=RunState.SUCCEEDED.value, finished_at=self._now(),
-                        published_count=len(published))
-        self._set_state(RunState.SUCCEEDED,
-                        f"分析完成,已发布 {len(published)} 个产物文件。")
+                        status=RunState.ANALYSIS_SUCCEEDED.value)
+
+        pending = publication.recovery_required(self.root)
+        if pending:
+            self._fail_publish(
+                f"存在未恢复的发布事务({', '.join(p['run_id'] for p in pending)}),"
+                "在完整性解决前禁止新的发布。")
+            return
+
+        try:
+            corpus_fp = self._corpus_fingerprint
+            previous = publication.last_publication_record(self.root)
+            manifest = publication.build_manifest(
+                work_dir=self.work_dir, project_dir=self.root, run_id=self.run_id,
+                corpus_fingerprint=corpus_fp,
+                params={k: self.params.get(k) for k in
+                        ("targets", "group_by", "mi_threshold", "pos_translate")},
+                produced=self.outputs.get("produced", []),
+                previous_record=previous,
+            )
+
+            def progress(stage: str, message: str) -> None:
+                self._set_state(RunState.PUBLISHING, f"{stage}: {message}")
+
+            record = publication.execute_publication(
+                manifest, self.work_dir, self.root, self.run_id,
+                progress_cb=progress,
+                fault_injection=self.publication_fault_injection,
+            )
+            publication.write_published_pointer(self.root, record)
+            jobs.update_run(self.root, self.run_id,
+                            status=RunState.SUCCEEDED.value, finished_at=self._now(),
+                            published_count=len(record["owned_paths"]),
+                            published_run_id=self.run_id,
+                            manifest_sha256=record["manifest_sha256"])
+            self._set_state(RunState.SUCCEEDED,
+                            f"发布完成({len(record['owned_paths'])} 个 owned outputs 已提交)。")
+            self._terminate()
+        except PublicationError as exc:
+            self._fail_publish(str(exc))
+        except Exception as exc:  # noqa: BLE001 - any publish crash -> rollback path
+            self._fail_publish(f"发布过程异常: {exc}")
+
+    def _fail_publish(self, message: str) -> None:
+        jobs.update_run(self.root, self.run_id,
+                        status=RunState.PUBLISH_FAILED.value, finished_at=self._now(),
+                        error=message)
+        self._set_state(RunState.PUBLISH_FAILED,
+                        message + "(旧成功结果保持有效;工作目录与事务现场已保留)")
         self._terminate()
 
     def _fail(self, message: str) -> None:

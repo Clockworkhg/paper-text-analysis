@@ -24,6 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from gui_next.execution import jobs
 from gui_next.execution.events import encode, error_event, log_event, result_event, stage_event  # noqa: E402
 
 
@@ -32,28 +33,34 @@ def emit(event: dict) -> None:
     sys.stdout.flush()
 
 
+def run_sanity_job(spec: dict) -> dict:
+    """Sanity check against the *given* directory (never project.json's
+    stored path — a work copy or relocation must not redirect the check).
+    Composed from the same shared check functions the CLI uses; writes only
+    the sanity report file. Kept as a module function for parity tests.
+    """
+    from shared.corpus_sanity import check_corpus_sanity, check_registry_sanity
+    from shared.research_output import write_json
+
+    project_dir = Path(spec["project_dir"])
+    emit(stage_event("RUNNING", "sanity check"))
+    corpus_report = check_corpus_sanity(project_dir / "corpus")
+    registry_report = check_registry_sanity(project_dir)
+    result = {
+        "ok": bool(corpus_report["ok"] and registry_report["ok"]),
+        "corpus": corpus_report,
+        "registry": registry_report,
+    }
+    report_path = project_dir / "07_reports" / "corpus_sanity_report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    write_json(report_path, result)
+    return {"sanity_report": str(report_path), "ok": result["ok"]}
+
+
 def run_job(spec: dict) -> dict:
     kind = spec.get("kind", "analyze")
     if kind == "sanity":
-        # Composed from shared check functions against the *given* directory
-        # (never project.json's stored path — a work copy or relocation must
-        # not redirect the check). Writes only the sanity report file.
-        from shared.corpus_sanity import check_corpus_sanity, check_registry_sanity
-        from shared.research_output import write_json
-
-        project_dir = Path(spec["project_dir"])
-        emit(stage_event("RUNNING", "sanity check"))
-        corpus_report = check_corpus_sanity(project_dir / "corpus")
-        registry_report = check_registry_sanity(project_dir)
-        result = {
-            "ok": bool(corpus_report["ok"] and registry_report["ok"]),
-            "corpus": corpus_report,
-            "registry": registry_report,
-        }
-        report_path = project_dir / "07_reports" / "corpus_sanity_report.json"
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        write_json(report_path, result)
-        return {"sanity_report": str(report_path), "ok": result["ok"]}
+        return run_sanity_job(spec)
 
     if kind == "analyze":
         if spec.get("test_sleep_before_analyze"):
@@ -64,6 +71,8 @@ def run_job(spec: dict) -> dict:
 
         from shared.project_workflow import project_analyze
 
+        work_dir = Path(spec["project_dir"])
+        before = jobs.snapshot_files(work_dir)
         emit(stage_event("RUNNING", "corpus model + modifier analysis"))
         outputs = project_analyze(
             spec["project_dir"],
@@ -74,7 +83,10 @@ def run_job(spec: dict) -> dict:
             sanity=bool(spec.get("sanity", True)),
             force=True,
         )
-        return {"analysis_output": outputs.get("analysis_output", "")}
+        produced = sorted(jobs.snapshot_files(work_dir) - before)
+        outputs = dict(outputs)
+        outputs["produced"] = produced
+        return {"analysis_output": outputs.get("analysis_output", ""), "produced": produced}
 
     raise ValueError(f"Unknown job kind: {kind}")
 

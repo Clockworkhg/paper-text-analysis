@@ -226,6 +226,12 @@ class ProjectStore:
     def run_manifest(self, run_id: str) -> Dict[str, Any]:
         return _read_json(self.root / "runs" / run_id / "manifest.json")
 
+    def published_analysis(self) -> Dict[str, Any]:
+        """Current published generation identity (Phase 2B.1)."""
+        from gui_next.execution.publication import read_published_pointer
+
+        return read_published_pointer(self.root)
+
     # ------------------------------------------------------------------
     # inter-rater reliability (honest statistic display)
 
@@ -396,12 +402,16 @@ class ProjectStore:
         ]
 
     def stat_chips(self) -> List[Dict[str, str]]:
+        from gui_next.execution.publication import read_published_pointer
+
+        published = read_published_pointer(self.root)
         return [
             {"label": "文档", "value": str(len(self.documents_df))},
             {"label": "KWIC 命中", "value": f"{len(self.kwic_df):,}"},
             {"label": "搭配候选", "value": f"{len(self.collocates_df):,}"},
             {"label": "目标词", "value": str(len(self.targets))},
             {"label": "分组", "value": self.group_by},
-            {"label": "运行", "value": f"#{self.run_id[-6:]}" if self.run_id else "–"},
+            {"label": "当前结果", "value": (f"Run #{published['published_run_id'][-6:]}"
+                                      if published.get("published_run_id") else "–")},
         ]
 

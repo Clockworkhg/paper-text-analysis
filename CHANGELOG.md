@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.4.4-unreleased - gui-next Phase 2B.1: Transactional Publication Integrity
+
+### Added
+
+- Transactional publication with a strict allowlist contract: analysis
+  outputs are enumerated in a publication manifest (path/sha256/size/category
+  per file, files_to_remove, excluded list) and committed through
+  PREPARE -> BACKUP -> COMMITTING -> COMMITTED with full ROLLBACK on any
+  failure — either the complete new generation or the complete previous one,
+  never a mix.
+- Minimal analysis work copies: only run inputs (corpus, project identity,
+  overrides) are copied — previous-run outputs can no longer impersonate new
+  results; the manifest is built from the runner's before/after produced-file
+  diff.
+- Obsolete owned outputs (present in the previous published generation but
+  no longer produced) are removed inside the same transaction, with backup
+  and rollback.
+- New lifecycle states ANALYSIS_SUCCEEDED / PUBLISHING / PUBLISH_FAILED; the
+  analysis writer lock and review lock now cover the whole publication phase,
+  and RECOVERY_REQUIRED transactions block new publications.
+- Crash recovery for COMMITTING publications: next startup rolls back to the
+  previous generation from the transaction backup (or flags
+  RECOVERY_REQUIRED), preserving journals, backups, work directories.
+- Published generation identity (`runs/published_analysis.json`):
+  published_run_id, manifest hash, corpus fingerprint, params hash,
+  completed_at — surfaced in Overview ("当前结果") instead of inferring from
+  loose files. project.json is no longer published as a file; analysis
+  history/latest pointers are merged field-wise after COMMITTED.
+- Sanity adapter parity test: the GUI sanity job and shared/CLI
+  `project_sanity` produce identical key fields on the same project.
+
+### Fixed
+
+- Windows text-mode hash mismatch in the publication journal writer
+  (binary write now).
+- Second-truncation false STALE in mtime-based corpus freshness (2s grace).
+
+## 0.4.3-unreleased - gui-next Phase 2B: Analysis Execution
 ## 0.4.3-unreleased - gui-next Phase 2B: Analysis Execution
 
 ### Added

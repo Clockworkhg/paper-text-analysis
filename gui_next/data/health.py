@@ -18,7 +18,7 @@ before it can be trusted again. BLOCKED dominates STALE.
 from __future__ import annotations
 
 import enum
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -43,18 +43,24 @@ def _parse_iso(value: Any) -> Optional[datetime]:
 
 def _corpus_changed_since(corpus_dir: Path, checked_at: Optional[datetime],
                           expected_documents: Optional[int]) -> bool:
-    """Legacy-report fallback: detect corpus changes by mtime and file count."""
+    """Legacy-report fallback: detect corpus changes by mtime and file count.
+
+    ``checked_at`` is second-truncated, so mtimes within a small grace window
+    after it are treated as unchanged (avoids false STALE for corpora created
+    in the same second as the check).
+    """
     files = sorted(corpus_dir.rglob("*.txt")) if corpus_dir.exists() else []
     if expected_documents is not None and len(files) != expected_documents:
         return True
     if checked_at is None:
         return False
+    grace = timedelta(seconds=2)
     for path in files:
         try:
             mtime = datetime.fromtimestamp(path.stat().st_mtime).astimezone()
         except OSError:
             continue
-        if mtime > checked_at:
+        if mtime > checked_at + grace:
             return True
     return False
 
