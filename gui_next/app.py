@@ -36,7 +36,9 @@ from gui_next.data.generations import GenerationResolver
 from gui_next.data.health import corpus_health
 from gui_next.data.review_store import SemanticReviewStore, SourceCountryReviewStore
 from gui_next.data.store import ProjectStore
+from gui_next.data.writing_store import WritingStore
 from gui_next.evidence_page import EvidencePage
+from gui_next.writing_page import WritingPage
 from gui_next.execution import jobs as run_jobs
 from gui_next.execution.controller import AnalysisController
 from gui_next.execution.events import RunState
@@ -44,7 +46,7 @@ from gui_next.inspector import InspectorPanel
 from gui_next.pages import AnalysisPage, CorpusPage, OverviewPage, RunsPage
 from gui_next.review_workbench import SemanticReviewWorkbench
 
-NAV_ITEMS = ["概览", "语料", "分析", "复核", "证据", "运行记录"]
+NAV_ITEMS = ["概览", "语料", "分析", "复核", "证据", "写作", "运行记录"]
 
 
 class EmptyState(QWidget):
@@ -186,6 +188,9 @@ class MainWindow(QMainWindow):
         evidence_store = EvidenceStore(store.root)
         resolver = GenerationResolver(store.root)
 
+        # Writing workspace (independent write boundary at 09_writing/).
+        writing_store = WritingStore(store.root)
+
         # Corpus health state machine (read-only fingerprint computation).
         from shared.corpus_sanity import corpus_fingerprint as _fingerprint
         try:
@@ -212,6 +217,9 @@ class MainWindow(QMainWindow):
             "证据": EvidencePage(evidence_store, resolver,
                                  lambda: self.store.published_analysis() if self.store else {},
                                  self.inspector, self._navigate),
+            "写作": WritingPage(writing_store, evidence_store, resolver,
+                                lambda: self.store.published_analysis() if self.store else {},
+                                self.inspector, self._navigate),
             "运行记录": RunsPage(store, self.inspector, evidence_store=evidence_store),
         }
         for key in NAV_ITEMS:

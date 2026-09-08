@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.1-unreleased - gui-next Phase 3B: Evidence-aware Writing Workspace
+
+### Added
+
+- Writing document model (`gui_next/data/writing_store.py`,
+  `09_writing/writing.json`): Research Draft with stable-id Sections
+  (hierarchy + ordering + rename + move + guarded delete) and four block
+  types (PROSE / CLAIM_REF / EVIDENCE_REF / RESEARCH_NOTE). Blocks store
+  references only — claim text and evidence metrics are always re-read from
+  the EvidenceStore and the published generation at render/export time.
+- Writing page: section tree (create/subsection/rename/move/delete),
+  block editors with debounce autosave and native undo, CLAIM and EVIDENCE
+  cards rendering live from the evidence store with verified-integrity
+  badges, Evidence Rail (Claims / Evidence / Inspector tabs) for inserting
+  references, Ctrl+Shift+C insert-claim shortcut.
+- Writing Integrity Preflight: aggregate VERIFIED / SOURCE_UNAVAILABLE /
+  INTEGRITY_ERROR / MISSING_REFERENCE counts over all claim and evidence
+  references (recursive through claims), locatable per section/block.
+- Markdown export in Draft and Clean modes with Evidence Appendix:
+  Clean uses [EVD-NNNN] reference numbers and excludes research notes;
+  both carry a prominent warning header when integrity issues exist.
+- Published-run freshness: writing references remain VERIFIED historical
+  evidence when a newer run publishes; "Older published run" is displayed
+  without marking stale.
+- WritingStateConflictError for cross-session concurrent edits with
+  reload-based resolution.
+
+## 0.5.0-unreleased - gui-next Phase 3A: Evidence Trail Core
 ## 0.5.0-unreleased - gui-next Phase 3A: Evidence Trail Core
 
 ### Added

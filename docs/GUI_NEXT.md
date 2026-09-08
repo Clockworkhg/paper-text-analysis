@@ -277,6 +277,69 @@ VALID HISTORICAL EVIDENCE**(界面显示 Older published run),绝不自动失效
   审计/调试用途;正式报告导出属 Phase 3B)。
 - Runs 页显示每代际的"证据引用"数;Evidence → Run 双向可达。
 
+## Phase 3B:Evidence-aware Writing Workspace(研究写作工作台)
+
+产品链条正式完成:Project → Corpus → Analysis → Review → Evidence → **Writing**。
+
+### Writing 数据模型(独立写边界)
+
+`gui_next/data/writing_store.py` 是唯一 Writing 写入口,数据存于
+`09_writing/writing.json`(schema v1、原子写入、乐观单写者冲突检测、溯源元数据)。
+WritingStore 不属于分析 owned outputs——publication 永不覆盖它。
+
+结构:Writing Document → Sections(稳定 `sec_` id、层级 parent_id、排序)→ Blocks。
+Block 四类:
+
+| 类型 | 存储 | 渲染 |
+|---|---|---|
+| PROSE | 研究者文本 | 可编辑段落(native undo、debounce 自动保存) |
+| CLAIM_REF | claim_id(引用,非复制) | Claim 卡片:标题/文本/evidence 数/Runs,自动反映 Claim 修改 |
+| EVIDENCE_REF | evidence_id(引用,非复制) | Evidence 卡片:指标从 EvidenceRecord + 已发布代际实时重读 |
+| RESEARCH_NOTE | 研究过程备注 | 标注 Private research note;Clean 导出排除 |
+
+**证据数字脱钩纪律**:Writing 只存 evidence_id,不存 "MI=4.81" 等独立数值。
+渲染/导出时:Writing → EvidenceStore → Historical Generation → 校验 → 显示。
+半年后仍能回答:这个 4.81 来自哪个 Run、哪个 corpus、哪套参数、哪个 manifest。
+
+### Integrity Preflight
+
+`Validate Evidence`(整个文档或当前 Section):所有 CLAIM_REF 递归检查其引用的
+EvidenceRecord,汇总 VERIFIED / SOURCE_UNAVAILABLE / INTEGRITY_ERROR /
+MISSING_REFERENCE 计数,并支持定位到具体 Section/Block。
+
+### 破损证据处理
+
+SOURCE_UNAVAILABLE 时仍显示 captured_snapshot 并标注 ⚠;INTEGRITY_ERROR 时显示
+✕ 且不得绿色渲染;不回退 latest run;不自动修改研究者 prose。
+
+### Older Run 不是错误
+
+引用 Run #014 而当前已 #017:仍然 ✓ Verified (Older published run)。Inspector
+显示 Current analysis vs Evidence source。是否升级到新 run 由研究者决定,本阶段
+无自动刷新。
+
+### Markdown 导出(双模式)
+
+- **Draft**:完整溯源 + Private research notes(可选);有完整性问题时也记录警告。
+- **Clean**:精简证据表示 + [EVD-NNNN] 引用编号 + Evidence Appendix(ID/类型/
+  target/Document ID/Source/Published Run/manifest hash/corpus fingerprint/
+  integrity;Pattern 含指标,KWIC 含短语境);有完整性问题时**必须**在文件顶部
+  写入 "WARNING: Evidence integrity issues are present.",不得静默生成看似正常的正式稿。
+- 导出前自动运行 Integrity Preflight。
+
+### 其他
+
+- Claim/Evidence 可在多章节引用(Section→ID 关系,不在 Claim 上存 section);
+  同一条 KWIC 属于 Claim A、Claim B,并出现在 Findings 和 Discussion,均引用
+  同一 EvidenceRecord。
+- 双向导航:Writing Claim block → Open Claim → Evidence → Open Run → Runs 页
+  (显示证据引用数)。
+- 编辑体验:QPlainTextEdit(native undo/copy/paste)、Ctrl+S、800ms debounce
+  自动保存、冲突时提示 "Writing document changed in another session" + Reload。
+- 删除 Section 有确认;删除 Block 仅解除写作引用;Claim/Evidence 本体的删除仍由
+  Evidence 页规则控制。
+- 无 AI 自动写作;无 DOCX;无 Run Compare。
+
 ## 阶段规划
 
 | 阶段 | 内容 | 状态 |
@@ -286,6 +349,7 @@ VALID HISTORICAL EVIDENCE**(界面显示 Older published run),绝不自动失效
 | Phase 2B | 分析运行接入(执行层/生命周期/隔离/取消/崩溃恢复) | ✅ |
 | Phase 2B.1 | 事务化发布(manifest 契约/备份回滚/崩溃恢复/发布身份/sanity parity) | ✅ |
 | Phase 3A | Evidence Trail Core(证据捕获/Claim 工作台/历史代际解析/完整性校验) | ✅ |
+| Phase 3B | Evidence-aware Writing Workspace(结构化写作/证据卡片/Markdown 导出/Appendix) | ✅ |
 | Phase 3 | Evidence Trail(证据篮 → Claim→Pattern→KWIC→Document→Run 导出)、Run Compare、Report | 待做 |
 | 收尾 | 旧 Tkinter GUI 移除(CLI 永久保留) | 待做 |
 
