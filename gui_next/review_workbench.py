@@ -96,6 +96,7 @@ class SemanticReviewWorkbench(QWidget):
         self.setObjectName("Page")
         self.review = store
         self.inspector = inspector
+        self._locked = False
         self.setFocusPolicy(Qt.StrongFocus)
 
         root = QVBoxLayout(self)
@@ -184,19 +185,23 @@ class SemanticReviewWorkbench(QWidget):
         note_caption = QLabel("研究备注")
         note_caption.setStyleSheet(f"color: {theme.MUTED}; background: transparent;")
         self._note = QLineEdit()
+        self._note.setObjectName("NoteInput")
         self._note.setPlaceholderText("可选;Enter 保存并跳下一条;Esc 退出备注框")
         self._note.installEventFilter(self)
+        self._note_caption = note_caption
         note_row.addWidget(note_caption)
         note_row.addWidget(self._note, 1)
         root.addLayout(note_row)
 
-        hint = QLabel(
-            "快捷键:1/2/3/4 = Positive/Negative/Neutral/Mixed · X = Exclude · U = Uncertain · "
-            "Enter = 保存并下一条 · Shift+Enter = 上一条 · O = 打开全文 · F2 = 备注 · "
-            "Ctrl+Z = 撤销上一次编码(备注框内字母数字照常输入)"
-        )
-        hint.setStyleSheet(f"color: {theme.MUTED}; background: transparent;")
-        root.addWidget(hint)
+        help_row = QHBoxLayout()
+        self._summary_hint = QLabel("1/2/3/4 编码 · X Exclude · U Uncertain · Enter 下一条")
+        self._summary_hint.setStyleSheet(f"color: {theme.MUTED}; background: transparent;")
+        help_button = QPushButton("键盘快捷键 (? 或 F1)")
+        help_button.setObjectName("Flat")
+        help_button.clicked.connect(self.show_keyboard_help)
+        help_row.addWidget(self._summary_hint, 1)
+        help_row.addWidget(help_button)
+        root.addLayout(help_row)
 
         # Coding/text keys are handled in keyPressEvent (so they can still be
         # typed inside the note field); no QShortcut for text keys.
@@ -244,12 +249,49 @@ class SemanticReviewWorkbench(QWidget):
             self._focus_note()
             event.accept()
             return
+        if key == Qt.Key_F1 or key == Qt.Key_Question:
+            self.show_keyboard_help()
+            event.accept()
+            return
         super().keyPressEvent(event)
+
+    def show_keyboard_help(self) -> None:
+        """Keyboard reference popup — visible on demand, never in the way (#22)."""
+        from PySide6.QtWidgets import QDialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("复核键盘快捷键")
+        dialog.setMinimumSize(420, 300)
+        layout = QVBoxLayout(dialog)
+        help_text = QLabel(
+            "<b>编码</b><br>"
+            "1 Positive &nbsp; 2 Negative &nbsp; 3 Neutral &nbsp; 4 Mixed<br>"
+            "X Exclude &nbsp; U Uncertain<br><br>"
+            "<b>导航</b><br>"
+            "Enter 保存并下一条 &nbsp; Shift+Enter 上一条<br><br>"
+            "<b>其他</b><br>"
+            "O 打开全文 &nbsp; F2 备注框(Esc 退出)<br>"
+            "Ctrl+Z 撤销上一次编码<br><br>"
+            "备注框内字母数字照常输入。"
+        )
+        help_text.setWordWrap(True)
+        help_text.setTextFormat(Qt.RichText)
+        layout.addWidget(help_text)
+        close = QPushButton("关闭 (Esc)")
+        close.setObjectName("Primary")
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(close, 0, Qt.AlignRight)
+        dialog.exec()
 
     def eventFilter(self, obj, event) -> bool:
         """In the note field: Enter saves, Esc leaves; everything else types."""
         from PySide6.QtCore import QEvent
 
+        if obj is self._note and event.type() in (QEvent.FocusIn, QEvent.FocusOut):
+            editing = event.type() == QEvent.FocusIn
+            self._note_caption.setText("研究备注(编辑中)" if editing else "研究备注")
+            self._note_caption.setStyleSheet(
+                f"color: {theme.PRIMARY}; font-weight: 600; background: transparent;"
+                if editing else f"color: {theme.MUTED}; background: transparent;")
         if obj is self._note and event.type() == QEvent.KeyPress:
             if event.key() in (Qt.Key_Return, Qt.Key_Enter):
                 if event.modifiers() & Qt.ShiftModifier:
@@ -267,12 +309,18 @@ class SemanticReviewWorkbench(QWidget):
 
     def set_locked(self, locked: bool) -> None:
         """Analysis-run lock: review writes are disabled while a run is active."""
+        self._locked = locked
         for button in self._buttons.values():
             button.setEnabled(not locked)
         self._note.setEnabled(not locked)
         if locked:
-            self._latest_label.setText("🔒 分析运行中,复核写入已锁定(候选集即将更新)。")
-            self._latest_label.setStyleSheet(f"color: {theme.WARNING}; font-weight: 600;")
+            self._stale_banner.setText("🔒 分析运行中,复核写入已锁定(候选集即将更新)。")
+            self._stale_banner.setStyleSheet(
+                f"color: {theme.WARNING}; background: transparent; font-weight: 600;")
+            self._stale_banner.show()
+        else:
+            self._stale_banner.hide()
+            self.refresh()
 
     def refresh(self) -> None:
         progress = self.review.progress()
@@ -324,7 +372,7 @@ class SemanticReviewWorkbench(QWidget):
 
     def _apply_decision(self, decision: str) -> None:
         item = self.review.current_item()
-        if item is None:
+        if item is None or self._locked:
             return
         self.review.set_decision(item["item_id"], decision, note=self._note.text())
         self.review.set_cursor(self.review.cursor + 1)
@@ -334,7 +382,7 @@ class SemanticReviewWorkbench(QWidget):
     def save_and_next(self) -> None:
         """Persist note/cursor and advance (no confirmation dialog)."""
         item = self.review.current_item()
-        if item is None:
+        if item is None or self._locked:
             return
         if item["item_id"] in self.review.decisions:
             self.review.set_decision(item["item_id"],

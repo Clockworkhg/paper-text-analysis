@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
 from gui_next import theme
 from gui_next.data.evidence_store import EvidenceStore
 from gui_next.data.generations import GenerationResolver
+from gui_next.widgets import EmptyState
 from gui_next.data.writing_store import (
     BLOCK_CLAIM_REF,
     BLOCK_EVIDENCE_REF,
@@ -82,7 +83,7 @@ def _summary_line(store: WritingStore, evidence_store: EvidenceStore,
 class WritingPage(QWidget):
     def __init__(self, store: WritingStore, evidence_store: EvidenceStore,
                  resolver: GenerationResolver, published_provider,
-                 inspector, navigate, parent=None):
+                 inspector, navigate, parent=None, router=None):
         super().__init__(parent)
         self.setObjectName("Page")
         self.store = store
@@ -91,6 +92,7 @@ class WritingPage(QWidget):
         self.published_provider = published_provider
         self.inspector = inspector
         self.navigate = navigate
+        self.router = router
         self._current_section_id: Optional[str] = None
         self._editors: Dict[str, QPlainTextEdit] = {}
         self._save_timers: Dict[str, QTimer] = {}
@@ -121,8 +123,8 @@ class WritingPage(QWidget):
         self._preflight_label.setStyleSheet("background: transparent;")
         root.addWidget(self._preflight_label)
 
-        splitter = QSplitter(Qt.Horizontal)
-        root.addWidget(splitter, 1)
+        self.splitter = QSplitter(Qt.Horizontal)
+        root.addWidget(self.splitter, 1)
 
         self._tree = QTreeWidget()
         self._tree.setHeaderLabel("Sections")
@@ -130,7 +132,7 @@ class WritingPage(QWidget):
         self._tree.itemSelectionChanged.connect(self._on_section_selected)
         self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._section_menu)
-        splitter.addWidget(self._tree)
+        self.splitter.addWidget(self._tree)
 
         center = QWidget()
         center_layout = QVBoxLayout(center)
@@ -158,23 +160,21 @@ class WritingPage(QWidget):
             block_buttons.addWidget(button)
         block_buttons.addStretch(1)
         center_layout.addLayout(block_buttons)
-        splitter.addWidget(center)
+        self.splitter.addWidget(center)
 
         # ---- Evidence Rail --------------------------------------------
         rail = QTabWidget()
         self._rail_claims = QListWidget()
         self._rail_claims.itemDoubleClicked.connect(self._insert_claim_from_rail)
+        self._rail_claims.itemClicked.connect(self._show_rail_claim)
         rail.addTab(self._rail_claims, "Claims")
         self._rail_evidence_list = QListWidget()
         self._rail_evidence_list.itemDoubleClicked.connect(self._insert_evidence_from_rail)
+        self._rail_evidence_list.itemClicked.connect(self._show_rail_evidence)
         rail.addTab(self._rail_evidence_list, "Evidence")
-        self._rail_inspector = QLabel("选中 Rail 中的条目查看溯源。")
-        self._rail_inspector.setWordWrap(True)
-        self._rail_inspector.setStyleSheet(f"color: {theme.MUTED}; background: transparent;")
-        rail.addTab(self._rail_inspector, "Inspector")
-        splitter.addWidget(rail)
+        self.splitter.addWidget(rail)
 
-        splitter.setSizes([220, 760, 320])
+        self.splitter.setSizes([220, 760, 320])
 
         # ---- Keyboard ---------------------------------------------------
         insert_claim_shortcut = QShortcut(QKeySequence("Ctrl+Shift+C"), self)
@@ -189,15 +189,27 @@ class WritingPage(QWidget):
         self._pending_edit: Optional[tuple[str, str]] = None
 
         self._ensure_document()
+        self._empty_state = EmptyState(self)
+        self._empty_state.configure(
+            "No writing sections yet",
+            "创建第一个章节开始写作。Evidence/Claim 引用随后可插入任意章节。",
+            "New Section", self._new_section)
+        root.addWidget(self._empty_state)
         self._refresh_tree()
+        self._update_empty_visibility()
 
     # ------------------------------------------------------------------
     # document bootstrap
 
     def _ensure_document(self) -> None:
-        if not self.store.has_document:
-            self.store.new_document()
-        self._title_label.setText(f"Writing — {self.store.state.get('title', 'Research Draft')}")
+        """No auto-creation: opening a project must stay read-only.
+
+        The writing document is created on the researcher's first explicit
+        action (new section / add block), never on page open.
+        """
+        self._title_label.setText(
+            f"Writing — {self.store.state.get('title', 'Research Draft')}"
+            if self.store.has_document else "Writing")
 
     # ------------------------------------------------------------------
     # section tree
@@ -223,7 +235,15 @@ class WritingPage(QWidget):
                 numbers.get(self._current_section_id, "§"), Qt.MatchStartsWith)
             if matches:
                 self._tree.setCurrentItem(matches[0])
-        self._title_label.setText(f"Writing — {self.store.state.get('title', 'Research Draft')}")
+        self._title_label.setText(
+            f"Writing — {self.store.state.get('title', 'Research Draft')}"
+            if self.store.has_document else "Writing")
+        self._update_empty_visibility()
+
+    def _update_empty_visibility(self) -> None:
+        has_document = self.store.has_document
+        self._empty_state.setVisible(not has_document)
+        self.splitter.setVisible(has_document)
 
     def _selected_section_id(self) -> Optional[str]:
         items = self._tree.selectedItems()
@@ -242,11 +262,19 @@ class WritingPage(QWidget):
         title, ok = QInputDialog.getText(self, "New Section", "章节标题:")
         if not ok or not title.strip():
             return
+        self.create_section(title, parent_id=parent_id)
+
+    def create_section(self, title: str, parent_id: Optional[str] = None) -> str:
+        """Non-interactive section creation (the single document-write entry)."""
+        if not self.store.has_document:
+            self.store.new_document(skeleton=False)
+            self._update_empty_visibility()
         sid = self.store.add_section(title, parent_id=parent_id)
         self.store.save()
         self._refresh_tree()
         self._current_section_id = sid
         self._render_section(sid)
+        return sid
 
     def _new_subsection(self) -> None:
         sid = self._selected_section_id()
@@ -315,7 +343,16 @@ class WritingPage(QWidget):
             item = self._blocks_host.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                widget.hide()
+                widget.setParent(None)
                 widget.deleteLater()
+
+    def save_context(self) -> bool:
+        """Ctrl+S: flush the debounced prose edit immediately."""
+        if not self.store.has_document:
+            return False
+        self._flush_pending_edit()
+        return True
 
     def _flush_pending_edit(self) -> None:
         if not self._pending_edit:
@@ -394,15 +431,20 @@ class WritingPage(QWidget):
             body.setWordWrap(True)
             body.setStyleSheet("background: transparent;")
             layout.addWidget(body)
-            runs = sorted({e.get("published_run_id", "") for e in
-                           (self.evidence.get_evidence(eid) or {})
-                           for eid in claim.get("evidence_ids", [])})
+            runs = sorted({
+                e.get("published_run_id", "")
+                for eid in claim.get("evidence_ids", [])
+                for e in [self.evidence.get_evidence(eid) or {}]
+            })
             runs_label = QLabel("Runs: " + ", ".join("#" + r[-8:] for r in runs))
             runs_label.setStyleSheet(f"color: {theme.MUTED}; background: transparent; font-size: 11px;")
             layout.addWidget(runs_label)
             open_button = QPushButton("Open Claim")
             open_button.setFlat(True)
-            open_button.clicked.connect(lambda: self.navigate("证据"))
+            open_button.clicked.connect(
+                lambda _checked=False, cid=claim.get("claim_id", ""):
+                self.router.navigate_to("证据", cid, {"kind": "claim"})
+                if self.router is not None else self.navigate("证据"))
             layout.addWidget(open_button, 0, Qt.AlignLeft)
         elif block["type"] == BLOCK_EVIDENCE_REF:
             record = self.evidence.get_evidence(block.get("evidence_id", "")) or {}
@@ -440,22 +482,20 @@ class WritingPage(QWidget):
             run_label.setStyleSheet(f"color: {theme.MUTED}; background: transparent; font-size: 11px;")
             layout.addWidget(run_label)
 
-        # shared block controls
-        controls = QHBoxLayout()
-        controls.addStretch(1)
-        up = QPushButton("↑")
-        up.setFixedWidth(30)
-        up.clicked.connect(lambda: self._move_block(section_id, block_id, -1))
-        down = QPushButton("↓")
-        down.setFixedWidth(30)
-        down.clicked.connect(lambda: self._move_block(section_id, block_id, +1))
-        remove = QPushButton("Remove from Writing")
-        remove.clicked.connect(lambda: self._remove_block(section_id, block_id))
-        controls.addWidget(up)
-        controls.addWidget(down)
-        controls.addWidget(remove)
-        layout.addLayout(controls)
+        # Block controls live in a context menu — the prose stays the visual
+        # first class (#24).
+        frame.setContextMenuPolicy(Qt.CustomContextMenu)
+        frame.customContextMenuRequested.connect(
+            lambda pos, s=section_id, b=block_id: self._block_menu(frame, s, b, frame.mapToGlobal(pos)))
         return frame
+
+    def _block_menu(self, frame, section_id: str, block_id: str, global_pos) -> None:
+        menu = QMenu(self)
+        menu.addAction("上移 ↑", lambda: self._move_block(section_id, block_id, -1))
+        menu.addAction("下移 ↓", lambda: self._move_block(section_id, block_id, +1))
+        menu.addSeparator()
+        menu.addAction("Remove from Writing", lambda: self._remove_block(section_id, block_id))
+        menu.exec(global_pos)
 
     def _evidence_integrity(self, record: Dict[str, Any]) -> tuple[str, str]:
         from gui_next.data.writing_export import evidence_integrity
@@ -536,15 +576,32 @@ class WritingPage(QWidget):
         if evidence_id:
             self._insert_evidence_ref(evidence_id)
 
+    def _show_rail_evidence(self, item: QListWidgetItem) -> None:
+        evidence_id = item.data(Qt.UserRole)
+        record = self.evidence.get_evidence(evidence_id) if evidence_id else None
+        if record:
+            from gui_next.data.writing_export import evidence_integrity
+            state, detail = evidence_integrity(record, self.resolver)
+            self.inspector.show_evidence(record, state=state, state_detail=detail)
+
+    def _show_rail_claim(self, item: QListWidgetItem) -> None:
+        claim_id = item.data(Qt.UserRole)
+        claim = self.evidence.get_claim(claim_id) if claim_id else None
+        if claim:
+            self.inspector.show_claim(claim, len(claim.get("evidence_ids", [])))
+
     def _insert_evidence_dialog(self) -> None:
         records = self.evidence.evidence_records()
         if not records:
-            QMessageBox.information(self, "Insert Evidence", "证据箱为空。")
+            QMessageBox.information(self, "Insert Evidence", "证据箱为空;先在分析页添加证据。")
             return
-        items = [r.get("evidence_id", "") for r in records]
-        choice, ok = QInputDialog.getItem(self, "Insert Evidence", "选择证据 ID:", items, 0, False)
+        items = [f"{r.get('target', '')} · {r.get('evidence_type', '')} · "
+                 f"#{r.get('published_run_id', '')[-8:]} · {r.get('evidence_id', '')[:13]}"
+                 for r in records]
+        choice, ok = QInputDialog.getItem(self, "Insert Evidence", "选择证据:", items, 0, False)
         if ok:
-            self._insert_evidence_ref(choice)
+            index = items.index(choice)
+            self._insert_evidence_ref(records[index]["evidence_id"])
 
     # ------------------------------------------------------------------
     # rail
@@ -580,6 +637,10 @@ class WritingPage(QWidget):
     # validation + export
 
     def _validate(self) -> None:
+        if not self.store.has_document:
+            QMessageBox.information(self, "Validate Evidence",
+                                    "尚无写作文档;创建章节后即可校验证据完整性。")
+            return
         from gui_next.data.writing_export import validate_writing
         report = validate_writing(self.store, self.evidence, self.resolver,
                                   section_id=self._current_section_id)
@@ -595,6 +656,10 @@ class WritingPage(QWidget):
             self._preflight_label.setToolTip(details)
 
     def _export(self, mode: str) -> None:
+        if not self.store.has_document:
+            QMessageBox.information(self, "Export",
+                                    "尚无写作文档;创建章节后即可导出。")
+            return
         from gui_next.data.writing_export import export_markdown
         try:
             self._flush_pending_edit()

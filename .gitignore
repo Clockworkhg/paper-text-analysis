@@ -54,3 +54,6 @@ ocr_progress.log
 
 # Local app settings (may contain user paths)
 **/settings.json
+
+# Agent scratch space (baselines, audit harness, dev-only artifacts)
+.zcode/

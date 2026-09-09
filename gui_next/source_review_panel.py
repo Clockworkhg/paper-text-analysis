@@ -53,6 +53,7 @@ class SourceReviewPanel(QWidget):
         self.review = review_store
         self.inspector = inspector
         self.index = 0
+        self._locked = False
         self.setFocusPolicy(Qt.StrongFocus)
 
         root = QVBoxLayout(self)
@@ -80,7 +81,10 @@ class SourceReviewPanel(QWidget):
             f"background: {theme.BG}; border: 1px solid {theme.BORDER};"
             f"border-radius: 6px; padding: 12px;"
         )
-        root.addWidget(self._evidence, 1)
+        self._evidence.setMinimumHeight(96)
+        root.addWidget(self._evidence)
+
+        root.addStretch(1)
 
         boundary = QLabel("ⓘ 国别为自动推断的辅助变量,使用前必须人工复核;此处决定写入复核记录,不修改原始语料。")
         boundary.setWordWrap(True)
@@ -140,6 +144,7 @@ class SourceReviewPanel(QWidget):
 
     def set_locked(self, locked: bool) -> None:
         """Analysis-run lock: review writes are disabled while a run is active."""
+        self._locked = locked
         for button in self._buttons.values():
             button.setEnabled(not locked)
         self._country.setEnabled(not locked)
@@ -148,6 +153,8 @@ class SourceReviewPanel(QWidget):
             self._decision_label.setText("🔒 分析运行中,复核写入已锁定(来源表/候选集即将更新)。")
             self._decision_label.setStyleSheet(
                 f"background: transparent; color: {theme.WARNING}; font-weight: 600;")
+        else:
+            self.refresh()
 
     def refresh(self) -> None:
         progress = self.review.progress()
@@ -201,11 +208,18 @@ class SourceReviewPanel(QWidget):
             self.index = max(0, min(index, len(self.review.items) - 1))
             self.refresh()
 
+    def set_source(self, source_name: str) -> None:
+        """Select by source identity — table sorts never break the mapping."""
+        for position, item in enumerate(self.review.items):
+            if item["source"] == source_name:
+                self.set_index(position)
+                return
+
     # ------------------------------------------------------------------
 
     def _apply(self, decision: str) -> None:
         items = self.review.items
-        if not items:
+        if not items or self._locked:
             return
         source = items[self.index]["source"]
         self.review.set_decision(source, decision, country=self._country.text(), note=self._note.text())
@@ -215,7 +229,7 @@ class SourceReviewPanel(QWidget):
     def save_and_next(self) -> None:
         """Commit: a changed country means Change; otherwise Accept; then advance."""
         items = self.review.items
-        if not items:
+        if not items or self._locked:
             return
         item = items[self.index]
         source = item["source"]

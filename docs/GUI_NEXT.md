@@ -12,6 +12,72 @@ python -m gui_next projects/systemic_competitor
 # 或 editable 安装后: cads-gui-next <项目目录>
 ```
 
+## Phase 4A:GUI Product Consolidation & UX Hardening(产品收束)
+
+Phase 1–3C 的研究能力与数据语义冻结;Phase 4A 不新增任何分析算法、统计指标、
+DOCX、AI、Evidence/Review/Compare 能力或导出格式,只做 GUI 的统一、精修与验证。
+完整审计结论见 `docs/GUI_AUDIT.md`,视觉/组件规范见 `docs/GUI_DESIGN_SYSTEM.md`,
+快捷键见 `docs/KEYBOARD_SHORTCUTS.md`。
+
+### 全局 Shell
+
+顶部 **Project Context Bar**(项目名 · published run chip · corpus health chip ·
+执行状态 · Ctrl+K 搜索 · Inspector/Sidebar 折叠),左 240px 一级导航
+(概览·语料·分析·复核·证据·写作 | 运行记录 | 设置),中央 Workspace,
+右 340px Context Inspector(Ctrl+I 可折叠,会话记忆),底部瞬时状态栏。
+全局信息只在 Context Bar 出现一次。
+
+### 共享组件(消灭五套表格/三套横幅)
+
+`gui_next/widgets.py`:BaseTableView(行高/列宽/单击→Inspector、双击/Enter 激活、
+Ctrl+C、空态覆盖层)、FilterBar(搜索+下拉+Clear+结果计数)、EmptyState、
+Banner(info/warning/error)、Toast(仅成功反馈)、PageHeader。
+`gui_next/status.py` 是全部状态词的显示层(健康五态、复核四态、Evidence 完整性
+三态、运行 11 态、比较三态),UI 不再发明同义词。
+
+### 路由与全局搜索
+
+`gui_next/router.py`:`navigate_to(route, object_id, context)` 统一跨页跳转
+(对象类路由 document/kwic/evidence/claim/run/writing_section → 页面),会话
+历史支持 Alt+← Back;页面实现 `focus_object` 接收定位。Ctrl+K 检索
+Documents/Targets/Evidence/Claims/Writing sections/Runs(不搜 KWIC 全文)。
+
+### 页面收束
+
+- **Overview**:PROJECT(项目名+统计芯片)→ RESEARCH PIPELINE(九行状态,
+  状态词+字形,无假百分比)→ ATTENTION(需关注清单)→ NEXT ACTION(单一
+  下一步 + 主行动按钮);
+- **Analysis**:修复主体挤压布局缺陷;KWIC 列序 Keyword/Left/Right 先行
+  (NODE 加粗、运行元数据降灰,委托器实现);FilterBar 带结果计数;
+  Add to Evidence 统一进入 Inspector actions(E 键不变);
+- **Review**:键盘帮助改为 ? / F1 弹层;备注框编辑态可见;分析运行锁定
+  不再引用失效控件;
+- **Evidence**:Inbox 与 Claim workspace 分离(后者按 PATTERN / QUALITATIVE
+  分组);统一 Inspector(OPEN RUN / supporting KWIC / Replace in Claim /
+  Delete);完整性校验按 (run, manifest) 缓存;
+- **Writing**:最安静页面——块控件收进右键菜单,正文第一视觉;Rail 去掉
+  二级 Inspector(单点击进入全局 Inspector);无文档时空态引导,**打开项目
+  不再自动写盘**(写作文档惰性创建,首个 New Section 时才生成);
+- **Runs**:主表只留 Run/Date/Status/Corpus/Grouping/Targets/证据引用,
+  manifest/哈希进 Inspector;Compare 仅选中两个已发布运行时可用;
+  Compare 对话框带兼容性横幅。
+
+### 审计修复(必须保持的回归)
+
+B1 `datetime`/`store.root`(启动分析崩溃)、B2 evidence `json`/`Path` 导入、
+B3 Compare `QMessageBox` 导入、B4 复核锁定 `_latest_label`、B5 证据页重复
+方法/死代码、B6 分析页重复 addWidget(主体挤在左半屏)、B7 来源面板按视图
+行号取对象(排序错位)、B8 打开项目即写 `09_writing`、以及 Writing Claim 卡
+渲染的推导式 NameError。以上均有回归测试(`tests/test_gui_next_ux.py`)。
+
+### 验证 Gate(Phase 4A 收尾)
+
+1366/1440/1920/2560 offscreen 截图 + 125%/150% DPI 通过;11,105 KWIC 规模
+性能 smoke(load 18ms / filter 20ms / sort 5ms,远低于 500ms 冻结线);
+`tests/test_gui_next_e2e.py` 全用户故事(Overview→Corpus→Analysis→E 捕获→
+Review→Claim→Writing→Runs→Compare gate→Back→全局搜索);正式项目对
+Phase 3C 421-file 基线 byte-for-byte identical。
+
 ## 产品模型
 
 ```
@@ -384,6 +450,7 @@ Claim/Writing 不自动变化,选择权完全在研究者。
 | Phase 3A | Evidence Trail Core(证据捕获/Claim 工作台/历史代际解析/完整性校验) | ✅ |
 | Phase 3B | Evidence-aware Writing Workspace(结构化写作/证据卡片/Markdown 导出/Appendix) | ✅ |
 | Phase 3C | Published Run Compare & Evidence Refresh(兼容性门禁/目标差异/文档映射/证据刷新) | ✅ |
+| Phase 4A | GUI Product Consolidation & UX Hardening(App Shell/共享组件/Router/空态/审计修复/性能与安全 Gate) | ✅ |
 | Phase 3 | Evidence Trail(证据篮 → Claim→Pattern→KWIC→Document→Run 导出)、Run Compare、Report | 待做 |
 | 收尾 | 旧 Tkinter GUI 移除(CLI 永久保留) | 待做 |
 

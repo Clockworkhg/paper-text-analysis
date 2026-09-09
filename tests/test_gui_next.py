@@ -116,8 +116,9 @@ def test_main_window_builds_and_wires_pages(project_dir: Path, qapp):
     window = MainWindow()
     window.open_project(str(project_dir))
 
-    assert window._nav.currentRow() == 0
-    assert set(window._pages) == {"概览", "语料", "分析", "复核", "证据", "写作", "运行记录"}
+    assert window.current_route() == "概览"
+    assert set(window._pages) == {"概览", "语料", "分析", "复核", "证据",
+                                  "写作", "运行记录", "设置"}
 
     for key in ("语料", "分析", "复核", "运行记录", "概览"):
         window._navigate(key)
