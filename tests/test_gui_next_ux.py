@@ -476,8 +476,13 @@ def test_pages_render_at_required_resolutions(project_dir, window, size):
 
 
 def test_inspector_toggle_collapses_and_expands(project_dir, window):
+    """Isolation: clear persisted UI state first — real sessions may have
+    the inspector hidden by design, and this test needs the defaults."""
+    from PySide6.QtCore import QSettings
     from PySide6.QtWidgets import QApplication
 
+    QSettings("cads-workbench", "gui-next").clear()
+    window._inspector_toggle.setChecked(True)
     window.show()
     QApplication.processEvents()
     assert window.inspector.isVisible()

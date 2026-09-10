@@ -1,4 +1,4 @@
-# CADS Workbench v1.0-rc1 Release Notes
+# CADS Workbench v1.0.0-rc1 Release Notes
 
 发布日期:2026-09-10 · 基线 commit:`f24c820`(gui-v1.0-rc-base)
 
@@ -72,4 +72,4 @@
 
 ## 升级与兼容
 
-- v1.0-rc1 直接打开 Phase 1–4A 创建的项目;无数据模型迁移。
+- v1.0.0-rc1 直接打开 Phase 1–4A 创建的项目;无数据模型迁移。

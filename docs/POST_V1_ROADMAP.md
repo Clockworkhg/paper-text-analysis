@@ -19,6 +19,10 @@ Phase 4B 纪律:RC 阶段发现的功能请求一律**记录在本文件,不实�
 
 ## 平台与分发
 
+- Consider repository rename to `cads-workbench` at v1.0 Stable (RC release
+  URLs, tag and doc references are stable for now; renaming is a
+  Stable-era decision, not an RC one).
+
 - 安装器(MSI/NSIS)、代码签名、自动更新通道;
 - 文件关联(.cadsproj);
 - onefile 构建优化;
