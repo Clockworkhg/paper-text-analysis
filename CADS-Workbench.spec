@@ -32,12 +32,37 @@ try:
         capture_output=True, text=True, timeout=10).stdout.strip()
 except Exception:
     commit = ""
+import platform as _platform
+import sys as _sys
+
+def _pkg_version(name: str) -> str:
+    try:
+        from importlib import metadata
+        return metadata.version(name)
+    except Exception:
+        return ""
+
+_tag = ""
+try:
+    _tag = subprocess.run(
+        ["git", "describe", "--tags", "--exact-match", "HEAD"], cwd=str(ROOT),
+        capture_output=True, text=True, timeout=10).stdout.strip()
+except Exception:
+    pass
+
 build_meta = {
     "version": VERSION,
     "app_name": APP_NAME,
     "git_commit": commit,
+    "git_tag": _tag,
     "build_timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "build_mode": "packaged",
+    "python_version": _sys.version.split()[0],
+    "pyinstaller_version": _pkg_version("pyinstaller"),
+    "qt_version": _pkg_version("PySide6"),
+    "spacy_version": _pkg_version("spacy"),
+    "model_version": _pkg_version("en-core-web-sm") or _pkg_version("en_core_web_sm"),
+    "platform": f"{_platform.system()} {_platform.machine()}",
 }
 (ROOT / "build" / "build_meta.json").parent.mkdir(parents=True, exist_ok=True)
 (ROOT / "build" / "build_meta.json").write_text(

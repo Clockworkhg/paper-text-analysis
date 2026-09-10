@@ -2,7 +2,26 @@
 
 发布日期:2026-09-10 · 基线 commit:`f24c820`(gui-v1.0-rc-base)
 
-## 当前能力
+## What is included
+
+- **Project Hub**:新建 / 打开项目、最近项目、研究模板向导;
+- **Corpus**:语料导入(TXT / LexisNexis DOCX / CSV / Excel)、文档登记表、
+  来源规范化与国别人工复核、语料健康五态门禁;
+- **Analysis**:目标词中心的 Concordance / Collocates / Phrases / Groups;
+- **Review**:语义韵键盘编码工作台 + 复核状态完整性(指纹溯源、STALE 语义);
+- **Published Runs**:隔离执行、取消、崩溃恢复、运行审计记录(manifest、
+  指纹、参数、产物);
+- **Evidence Trail**:证据绑定已发布代际,Claim → Pattern → KWIC →
+  Document → Published Run 全链可追溯;
+- **Claims**:研究论断组织(不自动判定真假),证据多对多引用;
+- **Writing Workspace**:章节 + 正文 + Claim/证据引用卡片、完整性校验;
+- **Run Compare**:两个已发布运行的兼容性门禁与描述性差异;
+- **Evidence Refresh**:在新发布运行中定位对应证据,由研究者决定补充或替换;
+- **Markdown Export**:写作导出(Draft / Clean 双模式 + Evidence Appendix);
+- **Transactional publication**:分析产物要么完整发布、要么完整回滚,
+  绝不混合新旧结果。
+
+## 当前能力细节
 
 - **研究主链**:Project → Corpus → Analysis → Review → Evidence → Writing,
   Runs 作为可审计的执行基础设施;
@@ -34,6 +53,8 @@
 8. 运行对比的差异是**描述性**的,不直接建立实质性话语变化命题;
 9. 一个窗口一次打开一个项目;分析运行中不支持后台化退出;
 10. 未提供文件关联(.cadsproj 等)与安装器;当前发行形式为 onedir ZIP;
+11. **无 AI 自动研究结论**;软件不代替研究者作出解释;
+12. **无 telemetry / analytics / crash upload**;
 11. 无 telemetry;诊断信息仅用户主动导出时生成。
 
 ## 支持环境
