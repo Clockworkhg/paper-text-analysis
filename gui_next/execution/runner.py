@@ -20,9 +20,20 @@ import sys
 import time
 from pathlib import Path
 
+import os as _os
+
+# Analysis is headless: never let matplotlib probe GUI backends (the
+# packaged child has no tkinter — see RC packaged E2E).
+_os.environ.setdefault("MPLBACKEND", "Agg")
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+if not getattr(sys, "frozen", False):
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+# Keep subprocess scratch (matplotlib/tldextract caches) inside a writable
+# user directory when frozen — the install dir may be read-only.
+if getattr(sys, "frozen", False):
+    _os.environ.setdefault("MPLCONFIGDIR", str(_os.environ.get("APPDATA", ".")))
 
 from gui_next.execution import jobs
 from gui_next.execution.events import encode, error_event, log_event, result_event, stage_event  # noqa: E402
@@ -32,8 +43,15 @@ spec_path: Path = Path("")
 
 def emit(event: dict) -> None:
     line = encode(event)
-    sys.stdout.write(line + "\n")
-    sys.stdout.flush()
+    try:
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+    except UnicodeEncodeError:
+        # Last-resort: ASCII with escapes so an encoding edge case can
+        # never take down the analysis lifecycle stream.
+        payload = (line + "\n").encode("ascii", "backslashreplace").decode("ascii")
+        sys.stdout.write(payload)
+        sys.stdout.flush()
     # File-side trace: survives pipe/parent issues and makes hangs diagnosable.
     try:
         if spec_path.parent.name:
@@ -73,6 +91,15 @@ def run_job(spec: dict) -> dict:
     if kind == "sanity":
         return run_sanity_job(spec)
 
+    if kind == "probe_model":
+        # Packaging diagnostics: surface the real import error behind
+        # spacy's E050 in frozen builds.
+        import importlib
+        module = importlib.import_module("en_core_web_sm")
+        import spacy
+        nlp = spacy.load("en_core_web_sm")
+        return {"file": str(getattr(module, "__file__", "")), "lang": nlp.lang}
+
     if kind == "analyze":
         if spec.get("test_sleep_before_analyze"):
             emit(log_event(f"[test hook] sleeping {spec['test_sleep_before_analyze']}s before analysis"))
@@ -106,14 +133,43 @@ def main(argv: list[str]) -> int:
     global spec_path
     spec_path = Path(argv[0])
     spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    try:
+        # Execution-side log (#17); never fatal if logging cannot start.
+        from gui_next.logging_setup import setup_execution_logging
+        from gui_next.version import build_metadata
+        setup_execution_logging()
+        import logging as _logging
+        _logging.getLogger("execution").info(
+            "runner start kind=%s mode=%s", spec.get("kind", "analyze"),
+            build_metadata().get("build_mode"))
+    except Exception:
+        pass
     emit(stage_event("PREPARING", spec.get("kind", "analyze")))
     try:
         outputs = run_job(spec)
         emit(result_event(outputs))
         return 0
     except BaseException as exc:  # noqa: BLE001 - reported to the parent, then exit
-        emit(error_event(exc))
+        emit(_explained_error(exc))
         return 1
+
+
+def _explained_error(exc: BaseException) -> dict:
+    """Raw error event, with #21/#22-style explanations where known."""
+    from gui_next.execution.events import error_event
+
+    event = error_event(exc)
+    try:
+        if isinstance(exc, ModuleNotFoundError) and "en_core_web_sm" in str(getattr(exc, "name", "") or exc):
+            event["message"] = ("English analysis model is unavailable. "
+                                "The bundled build ships with the model; in development "
+                                "installs run: python -m spacy download en_core_web_sm")
+        elif isinstance(exc, PermissionError):
+            from gui_next.errors import friendly_io_error
+            event["message"] = friendly_io_error(exc)
+    except Exception:
+        pass
+    return event
 
 
 if __name__ == "__main__":

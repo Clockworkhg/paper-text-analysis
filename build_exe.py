@@ -130,12 +130,54 @@ def build_gui(*, onefile: bool, dry_run: bool, console: bool = False) -> None:
     run_pyinstaller(args, dry_run=dry_run)
 
 
+APP_NAME = "CADS Workbench"
+
+RELEASE_README_LINES = [
+    "CADS Workbench {version}",
+    "=============================",
+    "",
+    '运行:双击 "CADS Workbench.exe"。',
+    "",
+    "- 项目数据与 Recent Projects 保存在您的用户应用数据目录,",
+    "  不会写入安装目录。",
+    "- 日志位置:%APPDATA%" + chr(92) + "CADSWorkbench" + chr(92) + "logs" + chr(92),
+    "- 文档见 docs/ 子目录(Quick Start / Keyboard Shortcuts / Methodology)。",
+    "- 本软件不含 telemetry;诊断信息仅在你主动导出时生成。",
+    "- 已知限制见 docs/RELEASE_NOTES_v1.0-rc1.md。",
+]
+
+
+def build_workbench(*, dry_run: bool) -> None:
+    """Build the v1.0 RC product app (Phase 4B #8): onedir via spec."""
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    print(f"Building {APP_NAME} {version} (onedir)...")
+    args = [
+        str(ROOT / "CADS-Workbench.spec"),
+        "--noconfirm",
+        "--distpath", str(ROOT / "dist"),
+        "--workpath", str(ROOT / "build" / "workbench"),
+    ]
+    run_pyinstaller(args, dry_run=dry_run)
+    if not dry_run:
+        out = ROOT / "dist" / f"CADS-Workbench-{version}"
+        (out / "README.txt").write_text(
+            chr(10).join(RELEASE_README_LINES).format(version=version) + chr(10),
+            encoding="utf-8")
+        license_src = ROOT / "LICENSE"
+        if license_src.exists():
+            import shutil
+            shutil.copy2(license_src, out / "LICENSE")
+    print("  Done." if not dry_run else "  Dry run complete.")
+
+
 def main():
     configure_tcl_tk_env()
 
     parser = argparse.ArgumentParser(description="Build cads-workbench standalone executables")
     parser.add_argument("--cli", action="store_true", help="Build CLI only")
     parser.add_argument("--gui", action="store_true", help="Build GUI only")
+    parser.add_argument("--workbench", action="store_true",
+                        help="Build the CADS Workbench RC product app (onedir)")
     parser.add_argument("--clean", action="store_true", help="Remove build/dist before building")
     parser.add_argument("--onedir", action="store_true", help="Build folder-based apps instead of one-file executables")
     parser.add_argument("--dry-run", action="store_true", help="Print PyInstaller commands without running them")
@@ -147,7 +189,12 @@ def main():
         print("Cleaned build/ and dist/")
 
     onefile = not args.onedir
-    build_all = not args.cli and not args.gui
+    build_all = not args.cli and not args.gui and not args.workbench
+
+    if args.workbench:
+        build_workbench(dry_run=args.dry_run)
+        print(f"NOutput: {ROOT / 'dist'}"[:0] or f"{chr(10)}Output: {ROOT / 'dist'}")
+        return
 
     if build_all or args.cli:
         print("Building cads (CLI)...")

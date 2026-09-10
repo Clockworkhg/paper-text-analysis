@@ -137,22 +137,40 @@ class OverviewPage(QWidget):
         header = PageHeader(store.name, self.store.manifest.get("corpus_type", "") or "CADS 研究项目")
         root.addWidget(header)
 
+        # Stat chips: registry-level values render immediately; the two
+        # counts that require the big analysis sheets fill in after first
+        # paint (#35 — Launcher/Overview must not wait on Analysis data).
+        self._chip_values: Dict[str, QLabel] = {}
         chips_row = QHBoxLayout()
         chips_row.setSpacing(theme.SP_8)
-        for chip in store.stat_chips():
+        from gui_next.execution.publication import read_published_pointer
+        published = read_published_pointer(store.root)
+        cheap = [
+            ("文档", str(len(store.documents_df))),
+            ("KWIC 命中", "…"),
+            ("搭配候选", "…"),
+            ("目标词", str(len(store.targets))),
+            ("分组", store.group_by),
+            ("当前结果", (f"Run #{published['published_run_id'][-6:]}"
+                          if published.get("published_run_id") else "–")),
+        ]
+        for label, value in cheap:
             frame = QFrame()
             frame.setObjectName("Card")
             box = QVBoxLayout(frame)
             box.setContentsMargins(theme.SP_16, theme.SP_12, theme.SP_16, theme.SP_12)
             box.setSpacing(0)
-            value = QLabel(chip["value"])
-            value.setObjectName("StatValue")
-            label = QLabel(chip["label"])
-            label.setObjectName("StatLabel")
-            box.addWidget(value)
-            box.addWidget(label)
+            value_label = QLabel(value)
+            value_label.setObjectName("StatValue")
+            label_label = QLabel(label)
+            label_label.setObjectName("StatLabel")
+            box.addWidget(value_label)
+            box.addWidget(label_label)
+            self._chip_values[label] = value_label
             chips_row.addWidget(frame, 1)
         root.addLayout(chips_row)
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self._fill_heavy_stats)
 
         # Banners: only facts that block or warn.
         self._banner = Banner()
@@ -222,6 +240,16 @@ class OverviewPage(QWidget):
             done = QLabel("✓ 当前没有阻塞项。")
             done.setStyleSheet(f"color: {theme.SUCCESS}; font-weight: 600; background: transparent;")
             root.addWidget(done)
+
+    def _fill_heavy_stats(self) -> None:
+        if self._chip_values.get("KWIC 命中") is None:
+            return
+        try:
+            self._chip_values["KWIC 命中"].setText(f"{len(self.store.kwic_df):,}")
+            self._chip_values["搭配候选"].setText(f"{len(self.store.collocates_df):,}")
+        except Exception:
+            self._chip_values["KWIC 命中"].setText("–")
+            self._chip_values["搭配候选"].setText("–")
 
     # ------------------------------------------------------------------
 
@@ -705,11 +733,34 @@ class AnalysisPage(QWidget):
         for view in (self._kwic_view, self._collocate_view, self._phrase_view, self._group_view):
             view.installEventFilter(self)
 
+        self._data_loaded = False
         self._current_target = ""
         if store.targets:
             self._target_list.setCurrentRow(0)
             self._target_list.currentRowChanged.connect(self._on_target_changed)
             self._on_target_changed(0)
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        """First show loads the analysis sheets (off the open-project path)."""
+        super().showEvent(event)
+        if not self._data_loaded:
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, self._load_analysis_data)
+
+    def _load_analysis_data(self) -> None:
+        if self._data_loaded:
+            return
+        self._data_loaded = True
+        # target hit counts
+        kwic = self.store.kwic_df
+        counts = kwic["Target"].value_counts() if not kwic.empty and "Target" in kwic.columns else pd.Series(dtype=int)
+        for index, target in enumerate(self.store.targets):
+            if index < self._target_list.count():
+                self._target_list.item(index).setText(
+                    f"{target}  ({int(counts.get(target, 0)):,})")
+        self._apply_kwic_filter()
+        row = max(0, self._target_list.currentRow())
+        self._on_target_changed(row)
 
     # ------------------------------------------------------------------
     # views / routing
@@ -759,6 +810,8 @@ class AnalysisPage(QWidget):
         if row < 0 or row >= len(self.store.targets):
             return
         self._current_target = self.store.targets[row]
+        if not self._data_loaded:
+            return  # sheets load on first show of the page (#35)
         self._apply_kwic_filter()
         collocates = self.store.collocates_df
         if not collocates.empty and "Target" in collocates.columns:
@@ -1168,19 +1221,27 @@ def _open_folder(path: str) -> None:
 class SettingsPage(QWidget):
     """Application-level information and pointers. Not a research page."""
 
-    def __init__(self, store: Optional[ProjectStore] = None, parent=None):
+    def __init__(self, store: Optional[ProjectStore] = None, parent=None,
+                 window=None):
         super().__init__(parent)
         self.setObjectName("Page")
+        self._window = window
         root = QVBoxLayout(self)
         root.setContentsMargins(theme.SP_24, theme.SP_24, theme.SP_24, theme.SP_16)
         root.setSpacing(theme.SP_12)
-        header = PageHeader("设置", "应用信息与文档入口")
+        header = PageHeader("设置", "应用信息、诊断与文档入口")
         root.addWidget(header)
 
-        card, layout = _card("应用")
-        version = _read_version()
+        from gui_next.version import build_metadata, python_version, qt_version
+        meta = build_metadata()
+        card, layout = _card("ABOUT")
         rows = [
-            ("应用", f"CADS Workbench gui-next · version {version}"),
+            ("应用", f"{meta.get('app_name', 'CADS Workbench')} · "
+                     f"Version {meta.get('version', '')}"),
+            ("Build", f"commit {meta.get('git_commit', '–')} · "
+                      f"{meta.get('build_timestamp', '–')} · "
+                      f"{meta.get('build_mode', '')}"),
+            ("运行时", f"Python {python_version()} · Qt {qt_version()}"),
             ("项目", store.name if store else "未打开"),
             ("项目路径", str(store.root) if store else "–"),
             ("界面缩放", "跟随 Windows 显示缩放(100%/125%/150% 已验证)"),
@@ -1198,48 +1259,81 @@ class SettingsPage(QWidget):
             layout.addLayout(line)
         root.addWidget(card)
 
-        docs_card, docs_layout = _card("文档")
-        docs_layout.addWidget(_muted(
-            "设计系统、键盘快捷键与 GUI 审计文档位于项目 docs/ 目录:"))
+        diag_card, diag_layout = _card("DIAGNOSTICS")
+        diag_layout.addWidget(_muted(
+            "诊断包含版本/环境/日志/项目结构摘要与已发布运行标识;"
+            "不包含语料正文、KWIC 内容、Evidence 备注或 Writing 文本。"
+            "本应用不含 telemetry:诊断仅在你主动导出时生成。"))
+        diag_row = QHBoxLayout()
+        export_btn = QPushButton("Export Diagnostics")
+        export_btn.setObjectName("Primary")
+        export_btn.clicked.connect(self._export_diagnostics)
+        logs_btn = QPushButton("打开日志文件夹")
+        logs_btn.clicked.connect(self._open_logs)
+        diag_row.addWidget(export_btn)
+        diag_row.addWidget(logs_btn)
+        diag_row.addStretch(1)
+        diag_layout.addLayout(diag_row)
+        root.addWidget(diag_card)
+
+        docs_card, docs_layout = _card("HELP / DOCUMENTATION")
         for name, description in (
-            ("GUI_DESIGN_SYSTEM.md", "设计令牌、组件与页面结构规范"),
+            ("QUICKSTART_GUI.md", "快速开始(面向第一次使用者)"),
             ("KEYBOARD_SHORTCUTS.md", "全局与页面快捷键"),
-            ("GUI_AUDIT.md", "Phase 4A 审计结论"),
-            ("GUI_NEXT.md", "gui-next 总体设计"),
+            ("METHODOLOGY.md", "方法论与边界"),
+            ("RELEASE_NOTES_v1.0-rc1.md", "本版本能力与已知限制"),
+            ("GUI_DESIGN_SYSTEM.md", "设计令牌、组件与页面结构规范"),
         ):
             line = QHBoxLayout()
             label = QLabel(f"{description} — docs/{name}")
             label.setWordWrap(True)
-            open_docs = QPushButton("打开 docs 文件夹")
-            open_docs.setObjectName("Flat")
-            open_docs.clicked.connect(
-                lambda _checked=False, n=name: _open_docs_folder(n))
+            open_doc = QPushButton("打开")
+            open_doc.setObjectName("Flat")
+            open_doc.clicked.connect(
+                lambda _checked=False, n=name: self._open_doc(n))
             line.addWidget(label, 1)
-            line.addWidget(open_docs)
+            line.addWidget(open_doc)
             docs_layout.addLayout(line)
         root.addWidget(docs_card)
         root.addStretch(1)
 
+    # ------------------------------------------------------------------
 
-def _open_docs_folder(name: str) -> None:
-    import gui_next
-    docs_dir = os.path.join(os.path.dirname(os.path.dirname(gui_next.__file__)), "docs")
+    def _export_diagnostics(self) -> None:
+        if self._window is not None and hasattr(self._window, "_export_diagnostics"):
+            self._window._export_diagnostics()
+
+    def _open_logs(self) -> None:
+        from gui_next.appdata import logs_dir
+        _open_folder(str(logs_dir()))
+
+    @staticmethod
+    def _open_doc(name: str) -> None:
+        import os
+        import platform
+        import subprocess
+
+        from gui_next.version import docs_dir
+        path = docs_dir() / name
+        target = str(path if path.exists() else docs_dir())
+        try:
+            if platform.system() == "Windows":
+                os.startfile(target)  # noqa: S606
+            elif platform.system() == "Darwin":
+                subprocess.run(["open", target], check=False)
+            else:
+                subprocess.run(["xdg-open", target], check=False)
+        except OSError:
+            pass
+
+
+def _open_folder(path: str) -> None:
     try:
         if platform.system() == "Windows":
-            os.startfile(docs_dir)  # noqa: S606
+            os.startfile(path)  # noqa: S606
         elif platform.system() == "Darwin":
-            subprocess.run(["open", docs_dir], check=False)
+            subprocess.run(["open", path], check=False)
         else:
-            subprocess.run(["xdg-open", docs_dir], check=False)
+            subprocess.run(["xdg-open", path], check=False)
     except OSError:
         pass
-
-
-def _read_version() -> str:
-    import gui_next
-    version_path = os.path.join(os.path.dirname(os.path.dirname(gui_next.__file__)), "VERSION")
-    try:
-        with open(version_path, encoding="utf-8") as handle:
-            return handle.read().strip()
-    except OSError:
-        return "–"

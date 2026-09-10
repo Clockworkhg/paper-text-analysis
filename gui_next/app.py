@@ -41,6 +41,11 @@ from PySide6.QtWidgets import (
 )
 
 from gui_next import status, theme
+from gui_next.appdata import (
+    clear_crash_flag,
+    previous_session_crashed,
+    remember_project,
+)
 from gui_next.data.evidence_store import EvidenceStore
 from gui_next.data.generations import GenerationResolver
 from gui_next.data.health import corpus_health
@@ -52,8 +57,12 @@ from gui_next.writing_page import WritingPage
 from gui_next.execution import jobs as run_jobs
 from gui_next.execution.controller import AnalysisController
 from gui_next.execution.events import RunState
+from gui_next.errors import install_exception_handler
+from gui_next.hub import ProjectHub
 from gui_next.inspector import InspectorPanel
+from gui_next.logging_setup import setup_app_logging
 from gui_next.pages import AnalysisPage, CorpusPage, OverviewPage, RunsPage, SettingsPage
+from gui_next.project_validate import validate_project
 from gui_next.review_workbench import SemanticReviewWorkbench
 from gui_next.router import GlobalSearch, Router
 from gui_next.widgets import show_toast
@@ -64,6 +73,31 @@ NAV_SECTIONS = [
     ("应用", ["设置"]),
 ]
 NAV_ITEMS = [route for _label, routes in NAV_SECTIONS for route in routes]
+
+
+class _LazyKwic:
+    """Defers the 11k-row KWIC sheet read until a page actually needs it
+    (Phase 4B #35 — Launcher/Overview must not wait on Analysis data)."""
+
+    def __init__(self, store: ProjectStore):
+        self._store = store
+        self._df = None
+
+    def _materialize(self):
+        if self._df is None:
+            self._df = self._store.kwic_df
+        return self._df
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._materialize(), name)
+
+    def __getitem__(self, key):
+        return self._materialize()[key]
+
+    def __len__(self):
+        return len(self._materialize())
 
 
 class EmptyState(QWidget):
@@ -135,7 +169,17 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(self._empty)
         self._stack.setCurrentWidget(self._empty)
 
+        # Project Hub (launcher) — shown until a project opens (#2).
+        self._hub = ProjectHub()
+        self._hub.open_project_requested.connect(self.open_project)
+        self._hub.new_project_requested.connect(self._new_project_wizard)
+        self._stack.addWidget(self._hub)
+        self._stack.setCurrentWidget(self._hub)
+
+        self._nav.setEnabled(False)  # research routes need an open project
+        self._build_menus()
         self._install_global_shortcuts()
+        self._restore_window_state()
 
     # ------------------------------------------------------------------
     # context bar
@@ -250,6 +294,105 @@ class MainWindow(QMainWindow):
             self.show_route(route)
 
     # ------------------------------------------------------------------
+    # menus (File / Help)
+
+    def _build_menus(self) -> None:
+        bar = self.menuBar()
+        file_menu = bar.addMenu("文件")
+        file_menu.addAction("打开项目…", self._pick_project)
+        file_menu.addAction("新建项目…", self._new_project_wizard)
+        file_menu.addSeparator()
+        file_menu.addAction("导出诊断信息…", self._export_diagnostics)
+        file_menu.addSeparator()
+        file_menu.addAction("退出", self.close)
+
+        help_menu = bar.addMenu("帮助")
+        help_menu.addAction("快速开始", lambda: _open_doc("QUICKSTART_GUI.md"))
+        help_menu.addAction("键盘快捷键", lambda: _open_doc("KEYBOARD_SHORTCUTS.md"))
+        help_menu.addAction("方法论", lambda: _open_doc("METHODOLOGY.md"))
+        help_menu.addAction("数据安全与可复现性", lambda: _open_doc("DATA_DICTIONARY.md"))
+        help_menu.addSeparator()
+        help_menu.addAction("关于", self._show_about)
+
+    def _new_project_wizard(self) -> None:
+        from gui_next.wizard import NewProjectWizard
+
+        wizard = NewProjectWizard(self)
+        if wizard.exec() and wizard.project_dir():
+            self.open_project(str(wizard.project_dir()))
+
+    def _export_diagnostics(self) -> None:
+        from datetime import datetime as _dt
+        from pathlib import Path as _Path
+
+        from PySide6.QtWidgets import QFileDialog
+
+        from gui_next.appdata import app_data_dir
+        from gui_next.diagnostics import export_diagnostics
+        from gui_next.widgets import show_toast
+
+        default = _Path(app_data_dir()) / (
+            "diagnostics_" + _dt.now().strftime("%Y%m%d_%H%M%S") + ".zip")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Diagnostics", str(default), "Diagnostics (*.zip)")
+        if not path:
+            return
+        out = export_diagnostics(
+            self.store.root if self.store is not None else None, _Path(path))
+        show_toast(self, f"诊断包已导出:{out}", action_text="打开文件夹",
+                   action=lambda: _open_path(out.parent))
+
+    def _show_about(self) -> None:
+        from PySide6.QtWidgets import QMessageBox
+
+        from gui_next.version import build_metadata, python_version, qt_version, version_line
+        meta = build_metadata()
+        QMessageBox.about(
+            self, f"关于 {meta.get('app_name', 'CADS Workbench')}",
+            "<b>CADS Workbench</b><br>"
+            f"Version {meta.get('version', '')}<br>"
+            f"Commit {meta.get('git_commit', '–')} · "
+            f"Build {meta.get('build_timestamp', '–')} · {meta.get('build_mode', '')}<br>"
+            f"Python {python_version()} · Qt {qt_version()}<br><br>"
+            "License: MIT · "
+            '<a href="https://github.com/Clockworkhg/paper-text-analysis">Repository</a>')
+
+    # ------------------------------------------------------------------
+    # window state persistence (#7)
+
+    def _restore_window_state(self) -> None:
+        geometry = self._settings.value("window/geometry")
+        state = self._settings.value("window/state")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        if state is not None:
+            self.restoreState(state)
+        sizes = self._settings.value("window/splitter")
+        if sizes is not None:
+            try:
+                self._splitter.setSizes([int(v) for v in sizes])
+            except (TypeError, ValueError):
+                pass
+        self._clamp_into_screen()
+
+    def _clamp_into_screen(self) -> None:
+        """A layout saved on a larger screen must not open off-screen (#7)."""
+        screen = self.screen() or self.windowHandle().screen()
+        available = screen.availableGeometry()
+        frame = self.frameGeometry()
+        if not available.intersects(frame):
+            frame.moveCenter(available.center())
+            self.move(frame.topLeft())
+        if self.width() > available.width():
+            self.resize(min(1440, available.width()), self.height())
+            self.move(available.left() + theme.SP_24, self.y())
+
+    def _persist_window_state(self) -> None:
+        self._settings.setValue("window/geometry", self.saveGeometry())
+        self._settings.setValue("window/state", self.saveState())
+        self._settings.setValue("window/splitter", [str(v) for v in self._splitter.sizes()])
+
+    # ------------------------------------------------------------------
     # global shortcuts + session toggles
 
     def _install_global_shortcuts(self) -> None:
@@ -341,11 +484,23 @@ class MainWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
 
     def _open_project_impl(self, project_dir: str) -> None:
+        validation = validate_project(project_dir)
+        if not validation.openable:
+            # #3: never a raw exception — explain what is missing.
+            missing_text = ("缺失:" + "、".join(validation.missing)
+                            if validation.missing else validation.detail)
+            message = ("This folder is not a CADS Workbench project.\n"
+                       f"{project_dir}\n{missing_text}")
+            self.statusBar().showMessage(message.replace("\n", " "))
+            self._hub.show_validation_error(validation)
+            self._stack.setCurrentWidget(self._hub)
+            return
         store = ProjectStore(project_dir)
         if not store.is_project:
             self.statusBar().showMessage(f"未找到 project.json:{project_dir}")
             return
         self.store = store
+        remember_project(project_dir, store.name)
 
         # Crash recovery: publication transactions first (rollback to the
         # previous generation), then run-journal states.
@@ -367,7 +522,7 @@ class MainWindow(QMainWindow):
         # Review stores (the only review-write components in gui-next).
         source_review = SourceCountryReviewStore(store.root, documents_df=store.documents_df)
         semantic_review = SemanticReviewStore(
-            store.root, kwic_df=store.kwic_df, documents_df=store.documents_df,
+            store.root, kwic_df=_LazyKwic(store), documents_df=store.documents_df,
         )
 
         # Evidence Trail: independent write boundary + published-generation
@@ -391,6 +546,7 @@ class MainWindow(QMainWindow):
         for existing in list(self._pages.values()):
             self._stack.removeWidget(existing)
             existing.deleteLater()
+        self._nav.setEnabled(True)
         self._pages = {
             "概览": OverviewPage(
                 store, self.inspector, self._navigate,
@@ -413,7 +569,7 @@ class MainWindow(QMainWindow):
                                 self.inspector, self._navigate, router=self.router),
             "运行记录": RunsPage(store, self.inspector, evidence_store=self.evidence_store,
                                  router=self.router),
-            "设置": SettingsPage(store),
+            "设置": SettingsPage(store, window=self),
         }
         for key in NAV_ITEMS:
             self._stack.addWidget(self._pages[key])
@@ -509,14 +665,18 @@ class MainWindow(QMainWindow):
             return
         run_id = "gui_" + datetime.now().strftime("%Y%m%d_%H%M%S")
         spec = run_jobs.build_spec(kind="analyze", project_dir=str(self.store.root), **params)
-        if self.controller.start(spec, run_id):
-            page = self._pages["分析"]
-            summary = (f"targets: {params.get('targets', '')} · group_by: {params.get('group_by')} · "
-                       f"MI: {params.get('mi_threshold')} · sanity: {'on' if params.get('sanity') else 'SKIPPED'}")
-            page.run_panel.set_run(run_id, summary, str(self.store.root / "runs" / f"work_{run_id}"))
-            page.run_panel.begin_elapsed()
-            page.show_run_panel()
-            self._set_execution_busy(run_id)
+        if not self.controller.start(spec, run_id):
+            reason = self.controller.last_error or "writer lock unavailable"
+            self._log_status(f"分析未能启动:{reason}")
+            self.statusBar().showMessage(f"分析未能启动:{reason}", 8000)
+            return
+        page = self._pages["分析"]
+        summary = (f"targets: {params.get('targets', '')} · group_by: {params.get('group_by')} · "
+                   f"MI: {params.get('mi_threshold')} · sanity: {'on' if params.get('sanity') else 'SKIPPED'}")
+        page.run_panel.set_run(run_id, summary, str(self.store.root / "runs" / f"work_{run_id}"))
+        page.run_panel.begin_elapsed()
+        page.show_run_panel()
+        self._set_execution_busy(run_id)
 
     def _start_sanity(self) -> None:
         if self.controller is None or self.controller.state in (
@@ -524,12 +684,16 @@ class MainWindow(QMainWindow):
             return
         run_id = "san_" + datetime.now().strftime("%Y%m%d_%H%M%S")
         spec = run_jobs.build_spec(kind="sanity", project_dir=str(self.store.root))
-        if self.controller.start(spec, run_id):
-            page = self._pages["分析"]
-            page.run_panel.set_run(run_id, "corpus sanity check", "")
-            page.run_panel.begin_elapsed()
-            page.show_run_panel()
-            self._set_execution_busy(run_id)
+        if not self.controller.start(spec, run_id):
+            reason = self.controller.last_error or "writer lock unavailable"
+            self._log_status(f"Sanity 未能启动:{reason}")
+            self.statusBar().showMessage(f"Sanity 未能启动:{reason}", 8000)
+            return
+        page = self._pages["分析"]
+        page.run_panel.set_run(run_id, "corpus sanity check", "")
+        page.run_panel.begin_elapsed()
+        page.show_run_panel()
+        self._set_execution_busy(run_id)
 
     def _on_run_state(self, state_value: str, message: str) -> None:
         state = RunState(state_value)
@@ -545,6 +709,39 @@ class MainWindow(QMainWindow):
         page = self._pages.get("分析")
         if page is not None:
             page.run_panel.append_log(line)
+
+    def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        from PySide6.QtWidgets import QMessageBox
+
+        state = self.controller.state if self.controller is not None else RunState.IDLE
+        if state in (RunState.ANALYSIS_SUCCEEDED, RunState.PUBLISHING):
+            # A publication transaction is in flight — exiting now could
+            # force a rollback on next startup. Refuse politely.
+            QMessageBox.warning(
+                self, "CADS Workbench",
+                "发布事务正在进行中,不能退出;请等待事务进入安全点。")
+            event.ignore()
+            return
+        if state in (RunState.PREPARING, RunState.RUNNING, RunState.CANCELLING):
+            box = QMessageBox(self)
+            box.setWindowTitle("CADS Workbench")
+            box.setIcon(QMessageBox.Warning)
+            box.setText("Analysis is still running.")
+            box.setInformativeText("当前版本不支持后台继续运行;可以取消运行后退出,或返回等待完成。")
+            cancel_exit = box.addButton("Cancel and Exit", QMessageBox.DestructiveRole)
+            back = box.addButton("Return", QMessageBox.RejectRole)
+            box.exec()
+            if box.clickedButton() is not cancel_exit:
+                event.ignore()
+                return
+            self.controller.cancel()
+        # Flush pending debounced writes before shutdown.
+        writing = self._pages.get("写作")
+        if writing is not None:
+            writing.save_context()
+        clear_crash_flag()
+        self._persist_window_state()
+        super().closeEvent(event)
 
     def _on_run_finished(self, state_value: str) -> None:
         self._set_review_lock(False)
@@ -571,14 +768,217 @@ class MainWindow(QMainWindow):
             show_toast(self, "分析运行失败 — 详情见 Analysis 页运行面板。")
 
 
+def _open_doc(name: str) -> None:
+    """Open a bundled documentation file (#28)."""
+    import os
+    import platform
+    import subprocess
+
+    from gui_next.version import docs_dir
+    path = docs_dir() / name
+    if not path.exists():
+        path = docs_dir()
+    try:
+        if platform.system() == "Windows":
+            os.startfile(str(path))  # noqa: S606
+        elif platform.system() == "Darwin":
+            subprocess.run(["open", str(path)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(path)], check=False)
+    except OSError:
+        pass
+
+
+def _open_path(path) -> None:
+    import os
+    import platform
+    import subprocess
+
+    try:
+        if platform.system() == "Windows":
+            os.startfile(str(path))  # noqa: S606
+        elif platform.system() == "Darwin":
+            subprocess.run(["open", str(path)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(path)], check=False)
+    except OSError:
+        pass
+
+
+def _maybe_show_crash_notice(window) -> None:
+    """#20: one honest notice after an abnormal end; cleared on normal exit."""
+    if not previous_session_crashed():
+        return
+    from PySide6.QtWidgets import QMessageBox
+    notice = QMessageBox(window)
+    notice.setWindowTitle("CADS Workbench")
+    notice.setIcon(QMessageBox.Warning)
+    notice.setText("The previous session ended unexpectedly.")
+    notice.setInformativeText("如需报告问题,可导出诊断信息(设置 → Export Diagnostics)。")
+    notice.addButton("打开日志", QMessageBox.ActionRole)
+    notice.addButton("确定", QMessageBox.AcceptRole)
+    notice.exec()
+
+
+def _run_packaged_analysis_e2e(project: str) -> int:
+    """Hidden flag: the PACKAGED app drives sanity + analysis + publish
+    end-to-end through its own controller/runner child (#15 hard gate)."""
+    from datetime import datetime as _dt
+
+    def marker(message: str) -> None:
+        line = f"[e2e] {message} at {_dt.now().isoformat(timespec='seconds')}"
+        print(line, flush=True)
+        try:
+            from gui_next.appdata import app_data_dir
+            with open(app_data_dir() / "e2e_marker.log", "a",
+                      encoding="utf-8") as handle:
+                handle.write(line + chr(10))
+        except Exception:
+            pass
+
+    marker("boot")
+    app = QApplication([])
+    app.setStyleSheet(theme.build_qss())
+    window = MainWindow()
+    marker("window built")
+    window.resize(1440, 900)
+    window.open_project(project)
+    marker("project open")
+    window.show()
+
+    # NOTE: after each SUCCEEDED run the app refreshes the project and
+    # rebuilds the controller — so we wait on durable facts (sanity report /
+    # published pointer), not on signals from a controller instance that is
+    # about to be replaced.
+    from PySide6.QtTest import QTest
+
+    import time as _time
+
+    def wait_seconds(seconds: int) -> None:
+        # QTest.qWait proved unreliable in the frozen windowed build; use
+        # wall-clock waits with processEvents so signals/child pipes drain.
+        end = _time.monotonic() + seconds
+        while _time.monotonic() < end:
+            QApplication.processEvents()
+            _time.sleep(0.5)
+
+    from gui_next.execution.publication import read_published_pointer
+
+    marker("sanity start")
+    root = window.store.root
+    window._start_sanity()
+    end = _time.monotonic() + 900
+    while _time.monotonic() < end:
+        QApplication.processEvents()
+        _time.sleep(1)
+        if (root / "07_reports" / "corpus_sanity_report.json").exists():
+            break
+    if not (root / "07_reports" / "corpus_sanity_report.json").exists():
+        print("PACKAGED E2E FAIL: no sanity report after run")
+        return 3
+    marker("sanity ok")
+
+    # The sanity child may still be finishing (report written before the
+    # writer lock releases) — wait for the lock, then for the post-run
+    # project refresh to settle.
+    lock_wait_start = _time.monotonic()
+    while _time.monotonic() < lock_wait_start + 300:
+        QApplication.processEvents()
+        _time.sleep(0.5)
+        active = window.controller.analysis_writer_active() if window.controller else None
+        if active is None and window.controller.state is RunState.IDLE:
+            break
+    marker(f"writer lock released after "
+           f"{_time.monotonic() - lock_wait_start:.1f}s")
+
+    before = read_published_pointer(root).get("published_run_id", "")
+    targets = "; ".join(window.store.targets)
+    marker(f"analyze start: controller={window.controller} "
+           f"state={window.controller.state} "
+           f"writer={window.controller.analysis_writer_active()}")
+    window._start_analysis({
+        "targets": targets, "group_by": window.store.group_by or "source",
+        "mi_threshold": 3.0, "pos_translate": False, "sanity": True,
+    })
+    marker(f"after _start_analysis: state={window.controller.state} "
+           f"last_error={window.controller.last_error}")
+    end = _time.monotonic() + 1800
+    pointer = {}
+    while _time.monotonic() < end:
+        QApplication.processEvents()
+        _time.sleep(2)
+        pointer = read_published_pointer(root)
+        if pointer.get("published_run_id") and                 pointer.get("published_run_id") != before:
+            break
+    if not pointer.get("published_run_id") or             pointer.get("published_run_id") == before:
+        print(f"PACKAGED E2E FAIL: no new published run (before={before})")
+        return 4
+    pointer = window.store.published_analysis()
+    if not pointer.get("published_run_id"):
+        print("PACKAGED E2E FAIL: no published run pointer")
+        return 5
+    window.close()
+    print(f"PACKAGED E2E OK: run {pointer.get('published_run_id')}")
+    return 0
+
+
+def _run_smoke_project(project: str) -> int:
+    """Headless page walk for packaged-mode verification (hidden flag)."""
+    app = QApplication([])
+    app.setFont(QFont("Segoe UI", 9))
+    app.setStyleSheet(theme.build_qss())
+    window = MainWindow()
+    window.resize(1440, 900)
+    window.open_project(project)
+    window.show()
+    ok = []
+    for route in ("概览", "语料", "分析", "复核", "证据", "写作", "运行记录", "设置"):
+        window.show_route(route)
+        app.processEvents()
+        if not window._pages[route].isVisible():
+            print(f"SMOKE FAIL: {route} not visible")
+            return 2
+        ok.append(route)
+    corpus = window._pages["语料"]
+    corpus._doc_view.selectRow(0)
+    app.processEvents()
+    assert window.inspector._type_label.text() == "DOCUMENT"
+    window.close()
+    print("SMOKE OK:", ", ".join(ok))
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+
+    # Packaged child mode (#14): the frozen exe re-invokes itself to run an
+    # analysis job. Must be handled before any Qt setup.
+    if args and args[0] == "--gui-next-runner":
+        from gui_next.execution.runner import main as runner_main
+        return runner_main(args[1:])
+    if args and args[0] == "--version":
+        from gui_next.version import version_line
+        print(version_line())
+        return 0
+
+    # Hidden smoke hooks used by the RC packaged-mode E2E (source mode too).
+    if args and args[0] == "--smoke-project":
+        return _run_smoke_project(args[1] if len(args) > 1 else "")
+    if args and args[0] == "--e2e-analysis":
+        return _run_packaged_analysis_e2e(args[1] if len(args) > 1 else "")
+
+    setup_app_logging()
+    install_exception_handler()
+
     app = QApplication(args)
+    app.setApplicationName("CADS Workbench")
+    app.setOrganizationName("CADSWorkbench")
     app.setFont(QFont("Segoe UI", 9))
     app.setStyleSheet(theme.build_qss())
 
     window = MainWindow()
-    project = args[0] if args else ""
+    _maybe_show_crash_notice(window)
+    project = args[0] if args and not args[0].startswith("-") else ""
     if project and (Path(project) / "project.json").exists():
         window.open_project(project)
     window.show()

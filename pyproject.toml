@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cads-workbench"
-version = "0.3.0"
+version = "1.0.0-rc1"
 description = "Corpus-Assisted Discourse Studies (CADS) toolkit for news media text analysis"
 readme = "README.md"
 license = {text = "MIT"}
@@ -56,8 +56,8 @@ gui = [
 
 [project.scripts]
 cads = "research_tool:main"
-cads-gui = "integrated_app:main"
-cads-gui-next = "gui_next.app:main"
+cads-workbench = "gui_next.app:main"
+cads-gui-legacy = "integrated_app:main"
 
 [project.urls]
 Homepage = "https://github.com/Clockworkhg/paper-text-analysis"

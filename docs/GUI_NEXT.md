@@ -78,6 +78,20 @@ B3 Compare `QMessageBox` 导入、B4 复核锁定 `_latest_label`、B5 证据页
 Review→Claim→Writing→Runs→Compare gate→Back→全局搜索);正式项目对
 Phase 3C 421-file 基线 byte-for-byte identical。
 
+## Phase 4B:v1.0 Release Candidate & Distribution Hardening
+
+研究功能、数据模型、GUI 信息架构与设计系统继续冻结;本阶段把 gui-next 产品化:
+Project Hub(最近项目/新建向导/项目五态校验)、应用级状态(AppData 下的
+recent projects、窗口状态、滚动日志)、全局异常处理与诊断包(不含研究内容)、
+单一版本源(VERSION → version.py → About/日志/诊断)、打包(PyInstaller
+onedir,`CADS Workbench.exe`;分析子进程经 `--gui-next-runner` 复用同一 exe,
+模型 dist-info 与 tkinter 随包,MPLBACKEND=Agg + UTF-8 stdio 加固)、关闭
+生命周期与崩溃提示。验证:源码全量 pytest、clean-venv pytest、打包 E2E
+(`--smoke-project`、`--e2e-analysis` sanity+分析+事务发布硬 Gate)、中文/
+空格/括号路径、125%/150% DPI、421-file 正式项目基线不变。详见
+`docs/BUILDING.md`、`docs/QUICKSTART_GUI.md`、`docs/RELEASE_NOTES_v1.0-rc1.md`、
+`docs/RELEASE_CHECKLIST_V1.md`;功能候想池见 `docs/POST_V1_ROADMAP.md`。
+
 ## 产品模型
 
 ```

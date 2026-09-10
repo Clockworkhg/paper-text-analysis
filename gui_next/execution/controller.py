@@ -26,6 +26,34 @@ from gui_next.execution.events import ACTIVE_STATES, RunState, parse
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def _runner_command(spec_path: str) -> tuple:
+    """Child command for the analysis subprocess (Phase 4B #14).
+
+    Source mode:      python -m gui_next.execution.runner <spec>
+    Packaged mode:    the frozen exe re-invoked with a hidden runner flag —
+                      `sys.executable -m ...` is not valid under PyInstaller.
+    CADS_RUNNER_EXE overrides the child for cross-mode verification tests.
+    Both modes run the same runner module; no analysis logic is duplicated.
+
+    Returns (program, arguments) for QProcess.start.
+    """
+    import os
+    override = os.environ.get("CADS_RUNNER_EXE")
+    if override:
+        return (override, ["--gui-next-runner", spec_path])
+    if _frozen():
+        return (sys.executable, ["--gui-next-runner", spec_path])
+    return (sys.executable, ["-m", "gui_next.execution.runner", spec_path])
+
+
+def _runner_work_dir() -> str:
+    return str(REPO_ROOT) if not _frozen() else str(Path(sys.executable).parent)
+
+
 class AnalysisController(QObject):
     state_changed = Signal(str, str)      # RunState value, human message
     log_line = Signal(str)
@@ -67,13 +95,17 @@ class AnalysisController(QObject):
         from gui_next.execution.publication import recovery_required
 
         if self.state in ACTIVE_STATES:
+            self.last_error = "当前实例已有运行中的任务。"
             return False
         if recovery_required(self.root):
             self.last_error = "存在 RECOVERY_REQUIRED 的发布事务,完整性解决前禁止新的分析发布。"
             return False
         if jobs.active_writer(self.root):
+            self.last_error = (f"另一分析写任务({jobs.active_writer(self.root).get('run_id', '?')}) "
+                               "持有 writer 锁。")
             return False
         if not jobs.acquire_writer_lock(self.root, run_id):
+            self.last_error = "writer 锁不可用(可能被另一实例占用)。"
             return False
 
         self.run_id = run_id
@@ -118,7 +150,7 @@ class AnalysisController(QObject):
         })
 
         self._process = QProcess(self)
-        self._process.setWorkingDirectory(str(REPO_ROOT))
+        self._process.setWorkingDirectory(str(_runner_work_dir()))
         env = self._process.processEnvironment()
         env.insert("PYTHONIOENCODING", "utf-8")
         self._process.setProcessEnvironment(env)
@@ -128,8 +160,7 @@ class AnalysisController(QObject):
         self._process.finished.connect(self._on_finished)
 
         import json as _json
-        self._process.start(sys.executable, [
-            "-m", "gui_next.execution.runner", str(spec_path)])
+        self._process.start(*_runner_command(str(spec_path)))
         if not self._process.waitForStarted(10_000):
             self._fail("分析子进程启动失败")
             return False
