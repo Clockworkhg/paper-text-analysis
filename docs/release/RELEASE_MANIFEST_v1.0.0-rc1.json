@@ -1,0 +1,43 @@
+{
+  "product": "CADS Workbench",
+  "version": "1.0.0-rc1",
+  "git_commit": "8c4c095",
+  "git_tag": "v1.0.0-rc1",
+  "build_timestamp": "2026-09-10T11:26:30Z",
+  "release_directory": "CADS-Workbench-1.0.0-rc1",
+  "zip_name": "CADS-Workbench-1.0.0-rc1-win-x64.zip",
+  "exe_sha256": "c9665fe32548c8c788cb72ab1f4005a22a27baf0deab70261c3365425c4d4d99",
+  "zip_sha256": "4c82d1db135ce502a183ae9f63d7d7991c27764eeccf358858ae73f58d76b378",
+  "file_count": 3177,
+  "total_size_bytes": 487559550,
+  "key_file_hashes": {
+    "CADS Workbench.exe": "c9665fe32548c8c788cb72ab1f4005a22a27baf0deab70261c3365425c4d4d99",
+    "_internal/build_meta.json": "a88953dc737f1340802d1719c5f7a5496bb56c59ac762509c7d78869121ee9ae",
+    "LICENSE": "fa307ef3f45c1c79c4cf9ee8a76290a14ead563945e110838ec141eaf6b1367b",
+    "_internal/docs/RELEASE_NOTES_v1.0-rc1.md": "0816bbffaf01189282321b1301a5347a11297fdb81a4d411935d44033e3eb040"
+  },
+  "build_metadata": {
+    "version": "1.0.0-rc1",
+    "app_name": "CADS Workbench",
+    "git_commit": "8c4c095",
+    "git_tag": "",
+    "build_timestamp": "2026-09-10T11:26:30Z",
+    "build_mode": "packaged",
+    "python_version": "3.13.0",
+    "pyinstaller_version": "6.22.2",
+    "qt_version": "6.11.2",
+    "spacy_version": "3.8.16",
+    "model_version": "3.8.0",
+    "platform": "Windows AMD64"
+  },
+  "test_summary": {
+    "dev_pytest": "372 passed (HEAD 8c4c095, offscreen)",
+    "clean_venv_pytest": "372 passed (independent venv, declared dependencies only)",
+    "packaged_e2e": "PASS — --e2e-analysis: sanity + analysis + transactional publish (run gui_20260910_192929)",
+    "formal_project_safety": "421 files byte-for-byte identical to Phase 3C baseline, before and after packaged read-only smoke"
+  },
+  "privacy": {
+    "telemetry": "none",
+    "diagnostics": "user-initiated export only; excludes corpus text, KWIC contents, evidence notes, writing prose"
+  }
+}
