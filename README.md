@@ -1,138 +1,109 @@
 # CADS Workbench
 
-Corpus-assisted discourse analysis tools for research-grade text analysis.
+**Corpus-Assisted Discourse Studies Research Workspace**
 
-The project supports LexisNexis DOCX splitting, generic corpus import, source
-normalization, country inference, KWIC, collocation, modifier and phrase
-extraction, semantic-prosody candidates, group comparison, human review
-templates, and validation reports.
+A Windows desktop research workbench for corpus-assisted discourse studies:
+import a news corpus, run reproducible language analyses, review candidates
+by hand, organize evidence into claims, and write it up with full
+provenance — from one application, without installing Python.
 
-Method position:
+**Current version: v1.0.0-rc1 (Release Candidate, Windows x64)**
 
-> Corpus-Assisted Discourse Studies (CADS) + Critical Discourse Analysis
-> (CDA) + KWIC/Collocation/Semantic Prosody + Appraisal/Framing Analysis
+**[Download Latest RC](https://github.com/Clockworkhg/paper-text-analysis/releases)** — see
+[Release Notes](docs/RELEASE_NOTES_v1.0-rc1.md) and the
+[Quick Start Guide](docs/QUICKSTART_GUI.md).
+
+---
+
+## Research Workflow
+
+```
+Corpus → Analysis → Review → Evidence → Claim → Writing → Run Compare
+```
+
+Every analytical result is published as an immutable **Published Run** with a
+full manifest (corpus fingerprint, parameters, file hashes). Evidence binds to
+that generation, so any number in your writing can still be traced to its
+source years later.
+
+## Main Features
+
+- **Project Hub** — create or open projects, recent-project list, guided
+  new-project wizard (research templates, corpus import, analysis defaults)
+- **Corpus** — LexisNexis DOCX / TXT / CSV / Excel import, document registry,
+  source & country review, corpus health (sanity) gate
+- **Analysis** — target-centered KWIC concordance, collocates (MI / G²),
+  modifier phrases, group comparison
+- **Review** — keyboard-driven semantic-prosody coding workbench with
+  fingerprint-tracked review state
+- **Published Runs** — auditable execution history with cancel, crash
+  recovery, and transactional publication
+- **Evidence & Claims** — capture KWIC / patterns as evidence, organize into
+  research claims, verify integrity against the published generation
+- **Writing** — sectioned workspace with claim/evidence reference cards and
+  Markdown export (draft + clean with evidence appendix)
+- **Run Compare** — compatibility-gated comparison of two published runs
 
 ## Quick Start
 
-Install dependencies:
+1. Download and **fully extract** `CADS-Workbench-<version>-win-x64.zip`
+2. Double-click **`CADS Workbench.exe`** (no Python installation needed)
+3. **New Project** — follow the four-step wizard (name, research template,
+   corpus, target terms)
+4. **Import corpus** — LexisNexis DOCX, TXT folder, or CSV/Excel
+5. Run the **sanity check**, then **New Analysis Run**
+6. **Review** coded candidates, collect **Evidence**, organize into **Claims**
+7. **Write** with live evidence cards and **export** a Markdown draft
+8. Close and reopen anytime — projects and recent list are restored
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python -m spacy download en_core_web_sm
-```
+A full user guide is in [docs/QUICKSTART_GUI.md](docs/QUICKSTART_GUI.md).
+Prefer the command line? The classic CLI remains available — see
+[docs/WORKFLOW.md](docs/WORKFLOW.md).
 
-Run a LexisNexis DOCX pipeline:
+## Data Safety & Reproducibility
 
-```powershell
-python research_tool.py run -i corpus.docx -o output -t "China; India; Global South" --no-country
-```
+- Analysis execution and publication are separated: a new result becomes an
+  official Published Run only after the publication transaction commits —
+  failures roll back completely, never "half new, half old"
+- Evidence is bound to immutable published generations and traceable to
+  corpus fingerprint, analysis parameters, publication manifest, and
+  document/KWIC/pattern provenance
+- Automated outputs are candidate evidence, not final interpretation;
+  human review is part of the workflow by design
+- No telemetry, no analytics, no crash uploads. Diagnostics are generated
+  only on explicit user export and exclude corpus text and research content
+- The application never modifies your corpus; all writes have defined
+  boundaries with atomic saves and rollback
+- This software does not replace system backups — keep your own project
+  backups
 
-Import a generic TXT/DOCX folder or CSV/Excel table:
+## Known Limitations
 
-```powershell
-python research_tool.py import -i raw_texts -o output --corpus-type policy -t "risk; responsibility"
-python research_tool.py analyze -o output -t "risk; responsibility" --group-by institution
-```
+See [Release Notes](docs/RELEASE_NOTES_v1.0-rc1.md) for the full list.
+Highlights:
 
-Group comparison supports `--group-by source|institution|country|custom`
-(raw source header, normalized outlet, per-source country, or an editable
-`01_corpus/group_overrides.xlsx` mapping, e.g. stance categories).
+- Primarily designed for **English** corpora
+- NLP model: spaCy `en_core_web_sm` (small model accuracy bounds)
+- MI / G² rank candidate patterns; they do not by themselves establish
+  discourse conclusions
+- Semantic prosody and country assignments require **human review**
+- Writing export is Markdown; no DOCX/PDF yet
+- No AI-assisted writing or automatic conclusions
 
-Generate review templates and validation reports:
+## Repository Layout (for contributors)
 
-```powershell
-python research_tool.py review output --sample-size 50
-```
+| Path | Purpose |
+|---|---|
+| `gui_next/` | PySide6 research workbench (the CADS Workbench product) |
+| `shared/`, `modules/`, `LexisWordToTxt/` | Frozen analysis pipeline (import, extraction, grouping, review artifacts) |
+| `research_tool.py` | Unified CLI (`cads`) |
+| `pipeline.py` | Legacy compatibility CLI |
+| `integrated_app.py` | Legacy Tkinter GUI (`cads-gui-legacy`) |
+| `docs/` | Product, methodology, and engineering documentation |
 
-Run tests:
+Build instructions: [docs/BUILDING.md](docs/BUILDING.md).
+Release checklist: [docs/RELEASE_CHECKLIST_V1.md](docs/RELEASE_CHECKLIST_V1.md).
 
-```powershell
-python research_tool.py test
-```
+## License
 
-Install editable CLI entry points for development:
-
-```powershell
-python -m pip install -e ".[dev]"
-cads --help
-cads-gui
-```
-
-## Main Entry Points
-
-- `research_tool.py`: primary CLI for daily use.
-- `integrated_app.py`: Tkinter desktop application.
-- `gui_next/`: PySide6 research evidence workbench (read-only Phase 1); run with
-  `python -m gui_next PROJECT_DIR` after `pip install -e ".[gui]"`. See
-  [GUI Next](docs/GUI_NEXT.md).
-- `pipeline.py`: legacy full-pipeline CLI.
-- `tools/ocr_scanned_pdfs.py`: OCR helper for scanned PDFs.
-
-## Packaging
-
-Development runs use `python research_tool.py ...` or the editable `cads`
-entry point. Standalone Windows executables are built with PyInstaller:
-
-```powershell
-python -m pip install -e ".[build]"
-python build_exe.py --dry-run
-python build_exe.py --cli
-python build_exe.py --gui
-```
-
-See [Packaging](docs/PACKAGING.md) for the release checklist and debug options.
-
-## Main Outputs
-
-A full run writes files such as:
-
-```text
-output/
-  run_config.json
-  00_run_config/
-  01_corpus/
-  06_review/
-  07_reports/
-  corpus/
-  source_counts.xlsx
-  merged_sources.xlsx
-  adjectives_phrases.xlsx
-  adjectives_final.xlsx
-```
-
-The main analysis workbook, `adjectives_phrases.xlsx`, includes:
-
-- `KWIC`: target-term contexts.
-- `Adjectives`: adjective/modifier candidates near target terms.
-- `Phrases`: phrase and lexical-bundle candidates.
-- `Collocates`: window-based co-occurrence candidates with MI and
-  log-likelihood scores.
-- `SemanticProsodyCandidates`: candidate polarity/domain hints for review.
-- `GroupComparison`: grouped source/corpus comparison.
-- `README` and `Meta`: field notes and run parameters.
-
-## Documentation
-
-- [Workflow](docs/WORKFLOW.md)
-- [Project Workflow](docs/PROJECT_WORKFLOW.md)
-- [Multi-Corpus Import](docs/MULTI_CORPUS_IMPORT.md)
-- [Methodology](docs/METHODOLOGY.md)
-- [Data Dictionary](docs/DATA_DICTIONARY.md)
-- [Validation](docs/VALIDATION.md)
-- [Research Templates](docs/RESEARCH_TEMPLATES.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Maintenance](docs/MAINTENANCE.md)
-- [Packaging](docs/PACKAGING.md)
-
-## Repository Hygiene
-
-Generated outputs, local projects, caches, build products, virtual
-environments, OCR logs, and private research materials are ignored by default.
-Keep reproducible examples in `examples/`; keep local analysis runs in
-`projects/`, `output/`, `outputs/`, `runtime/`, or `workspace/`.
-
-Automated outputs are candidate evidence, not final interpretation. Important
-claims should be checked against KWIC/context evidence and documented human
-review.
+MIT — see [LICENSE](LICENSE).
